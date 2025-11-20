@@ -1,14 +1,19 @@
-tensorflow==2.7.0
-tensorflow-quantum==0.7.2
-cirq==0.14.0
-numpy>=1.19.5
-pandas>=1.2.0
-scikit-learn>=0.24.0
-matplotlib>=3.3.0
-seaborn>=0.11.0
-sympy>=1.7.1
-tqdm>=4.50.0
+# Core QML Stack
+torch
+pennylane
+pennylane-qiskit
+qiskit
+qiskit-aer
 
-# Optional / advanced (uncomment if needed)
-# amazon-braket-sdk
-# ionq-sdk
+# Data + Preprocessing
+numpy
+pandas
+scikit-learn
+tqdm
+matplotlib
+
+# Utilities
+pyyaml
+joblib
+
+wandb

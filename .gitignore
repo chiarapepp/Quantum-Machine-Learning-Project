@@ -1,0 +1,21 @@
+# Dependencies and Package Management
+/node_modules
+.venv/
+__pycache__/
+
+# Logs and Temporary Files
+*.log
+*.tmp
+*.bak
+log/
+tmp/
+
+# Build and Distribution Artifacts
+/dist
+/build
+*.o
+*.obj
+*.exe
+*.dll
+
+data/
