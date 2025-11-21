@@ -1,141 +1,105 @@
 
 # Quantum Network Anomaly Detection — Reproduction
 
-This repository contains code to reproduce the methodology from the paper
-"Network Anomaly Detection Using Quantum Neural Networks on Noisy Quantum
-Computers" (Kukliansky et al.). The project implements:
+This repository contains code to reproduce a quantum-assisted network anomaly
+detection pipeline (implementation inspired by Kukliansky et al.). The code in
+this workspace provides preprocessing and a lightweight quantum neural network
+implementation along with training tooling.
 
-- A quantized angle encoding of NF-UNSW-NB15 NetFlow features into qubit
-  rotations (one qubit per feature with 0.25° granularity).
-- A lightweight ("Simple") QNN built from Rxx / Ryy two-qubit blocks and a
-  dedicated result qubit measured in the X basis.
-- Training and evaluation pipelines using TensorFlow Quantum (TFQ) and
-  Cirq for circuit construction.
+Key ideas implemented here:
 
-Files you will care about:
-- `dataset.py` — dataset loader and encoding builder (core preprocessing logic).
-- `nf_dataset_interface.py` — high-level interface to prepare, save and load
-  the encoded angle arrays and convert them to TFQ circuit tensors.
-- `qnn_nids_skeleton.py` — implementation of the Simple QNN (circuit builder,
-  PQC model builder, certainty factor helper).
-- `train.py` — training pipeline with optional (small) grid search, checkpointing
-  and logging.
-- `evaluate.py` — evaluation script that computes F1/precision/recall, certainty
-  factor distributions and produces diagnostic plots.
-- `requirements.txt` — pinned dependencies used for development and paper
-  reproduction (TF 2.7.0, TFQ 0.7.2).
+- Quantized-angle encoding of NetFlow features into qubit rotation angles.
+- A small "Simple" QNN architecture built from two-qubit rotation blocks.
+- Training and utilities to save checkpoints and diagnostics.
 
-## Quick setup (Windows PowerShell)
+Project layout (top-level items you'll care about):
 
-1. Create a Python environment (recommended):
+- `src/` — main Python sources
+  - `src/dataset.py` — dataset loading and preprocessing helpers
+  - `src/encoding.py` — quantized-angle encoding helpers
+  - `src/preprocessing.py` — preprocessing utilities and feature selection
+  - `src/qnn_simple.py` — quantum circuit / model builder for the Simple QNN
+  - `src/certainty_factor.py` — certainty / confidence utilities
+  - `src/architectures.py` — model architecture variants and helpers
+  - `src/train.py` — training pipeline, checkpointing and basic logging
+- `data/` — raw and processed datasets (CSV and encoded artifacts)
+- `results/` — training outputs and checkpoints
+- `configs/` — example configuration (e.g. `training.yml`)
+- `requirements.txt` — pinned Python dependencies used during development
+- `paper.md` — reference paper and notes
 
-```powershell
+Note: filenames above match the current repository. If you previously used a
+different fork or release that referenced other script names, please use the
+files under `src/` in this workspace.
+
+## Quick setup (Linux / bash)
+
+1. Create and activate a virtual environment (recommended):
+
+```bash
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+source .venv/bin/activate
 python -m pip install --upgrade pip
 ```
 
-2. Install dependencies (pinned):
+2. Install dependencies:
 
-```powershell
-python -m pip install -r requirements.txt
+```bash
+pip install -r requirements.txt
 ```
 
-Notes:
-- TensorFlow Quantum (TFQ) has specific compatibility constraints. The
-  `requirements.txt` pins TF 2.7.0 and TFQ 0.7.2 which were used in the paper.
-  If you need a newer TF version, check TFQ compatibility first.
-- TFQ may be slow on CPU-only systems. For faster training, install CUDA and
-  matching cuDNN compatible with TensorFlow 2.7.0. Follow TensorFlow's
-  official GPU installation guide.
+Tip: check `requirements.txt` for TF / TFQ versions if you plan to run on GPU or
+use TensorFlow Quantum — these libraries have strict compatibility requirements.
 
-## Preprocess / Encode (produce `.npz`)
+## Preprocess / Encode
 
-Use the high-level interface to preprocess the NF-UNSW-NB15 CSV and produce a
-compressed `.npz` containing the angle-encoded arrays and encoding tables.
+Preprocessing and encoding helpers live under `src/` (see `src/dataset.py` and
+`src/encoding.py`). Use those modules to convert the raw CSV under
+`data/raw/` to processed arrays or a compressed `.npz` with your chosen
+encodings. The repository does not enforce a single CLI entrypoint for
+preprocessing; import the helpers from Python or extend `src/train.py` to add
+a dedicated CLI command if you need one.
 
-```powershell
-# from repository root
-python -m nf_dataset_interface path\to\NF-UNSW-NB15.csv --out nf_encoded.npz
+Example (run from repository root) — run the training script which can accept
+an encoded `.npz` or re-run preprocessing depending on flags supported by the
+script:
+
+```bash
+python src/train.py --npz data/processed/nf_encoded.npz --out-dir experiments/test_run --n-epochs 20 --sample-limit 1000
 ```
 
-Or, from Python:
+The `--npz`/`--csv` flags and other arguments are handled by the script in
+`src/train.py` (inspect that file for the exact CLI). `--sample-limit` is
+useful for quick debugging.
 
-```python
-from nf_dataset_interface import NFDataInterface
-iface = NFDataInterface('path/to/NF-UNSW-NB15.csv')
-X_train_a, X_test_a, y_train, y_test = iface.prepare_data()
-iface.save_npz('nf_encoded.npz')
-```
+## Results & Checkpoints
 
-The preprocessing follows the paper: balance benign/malicious via resampling
-(`sklearn.utils.resample` with seed 123), selected features, and quantized
-angle mapping with 0.25° granularity.
-
-## Train (small example)
-
-Train using the encoded `.npz` (or point to CSV to re-run preprocessing):
-
-```powershell
-python .\train.py --npz nf_encoded.npz --out-dir experiments/test_run --n-epochs 20 --sample-limit 1000
-```
-
-Notes on arguments:
-- `--npz` : path to pre-encoded `.npz` from `nf_dataset_interface`.
-- `--csv` : alternatively provide CSV and the interface will preprocess.
-- `--sample-limit` : limit samples for quick debugging or hardware-limited runs.
-- `--grid` : enable a small grid search over learning rates, batch sizes, layers.
-
-Training artifacts are saved under `--out-dir` as subfolders `run_0`, `run_1`, …
-Each run folder contains `manifest.json`, `train_log.csv`, `best_model.h5`, and
-`final_weights.h5`.
-
-## Evaluate
-
-After training, evaluate the best run (or a chosen checkpoint):
-
-```powershell
-python .\evaluate.py --run-dir experiments/test_run\run_0 --npz nf_encoded.npz --out-dir eval_out
-```
-
-Outputs written to `eval_out`:
-- `metrics.json` — F1, precision, recall, confusion matrix
-- `certainty.npz` — arrays: `certainty`, `correct`, `expectations`, `probabilities`
-- `certainty_violin.png`, `certainty_hist.png` — diagnostic plots
-
-## Hardware / Noisy Simulation (notes)
-
-- This repo includes helpers to build Cirq circuits compatible with IonQ/Braket
-  (see `qnn_nids_skeleton.py` and `nf_dataset_interface.get_tfq_circuit_tensor`).
-- Submitting jobs to Aria/Harmony and using IonQ noise simulators involves
-  provider APIs (Amazon Braket / IonQ). For safety, no credentials are stored
-  here. If you want templates for Braket submission or IonQ serialization, I
-  can add `braket_submit.py` which will be a parameterized template (you must
-  add credentials locally).
+Training outputs are written to `results/` (or to the directory you pass as
+`--out-dir`). Checkpoints and logs are saved so you can evaluate runs later.
 
 ## Reproducibility
 
-- Each run saves a `manifest.json` containing hyperparameters and dataset
-  sizes. Save these and the encoding tables (`nf_dataset_interface.save_npz`) to
-  reproduce experiments exactly.
-- The code uses hinge loss with labels in {-1,1} as in the paper.
+- Save any generated encoding tables and `manifest.json` (if produced by a run)
+  to reproduce experiments.
+- The repository follows deterministic preprocessing choices where possible
+  (e.g., fixed random seeds for resampling). Check the preprocessing code for
+  the exact seeds and resampling approach.
 
-## Development & Tests
+## Development & Tests (suggestions)
 
 - Add unit tests under a `tests/` folder to validate encoding correctness,
-  circuit shapes, and the certainty factor computation. If you want, I can add
-  minimal tests that mock TFQ so CI can run without GPU.
+  circuit shapes, and the certainty factor computation. Consider mocking TFQ
+  in tests so CI can run without specialized hardware.
+- Add a short example Jupyter notebook that runs a tiny end-to-end experiment
+  with synthetic data if you'd like a quick demo that doesn't require TFQ.
 
-## Contact / Credits
+## Notes and next steps
 
-This code was implemented to match the methods from Kukliansky et al.'s paper
-"Network Anomaly Detection Using Quantum Neural Networks on Noisy Quantum
-Computers". See `paper.md` in this repository for the full text used as the
-reference.
+- I updated this README to reflect the current repository layout and Linux
+  usage. If you'd like, I can:
+  1. Add a small example notebook (`notebooks/demo.ipynb`) with synthetic data.
+  2. Add a dedicated CLI for preprocessing (if you prefer `python -m src.preprocess`).
+  3. Add unit tests for encoding and the certainty factor.
 
----
-If you'd like, I can also add a short example Jupyter notebook that runs a
-tiny end-to-end experiment with synthetic data so you can experiment without
-installing TFQ. Which would you prefer I add next: hardware templates or the
-synthetic demo notebook?
-# Quantum-Machine-Learning-Project
+If you'd like one of the follow-ups implemented now, tell me which and I'll add
+it.
