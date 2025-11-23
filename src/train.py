@@ -160,6 +160,13 @@ def accuracy_from_certainty_array(Cs: np.ndarray, y: np.ndarray) -> float:
     preds = (Cs >= 0).astype(int)
     return float(accuracy_score(y, preds))
 
+def hinge_accuracy(y_true, y_pred):
+    y_true = torch.squeeze(y_true)
+    y_pred = torch.squeeze(y_pred)
+
+    result_bool  = torch.eq(y_true, y_pred)
+    result = result_bool.float() 
+    return torch.mean(result)
 
 # -------------------------
 # Training / evaluation
