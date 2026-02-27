@@ -1,18 +1,9 @@
-# src/train.py
 """
-Training harness that uses your actual project files:
- - src/dataset.py         -> load_and_prepare_nf_unsw(csv_path, save_processed_csv=None)
- - src/encoding.py        -> QuantumEncoder
- - src/preprocessing.py   -> (not required, included for completeness)
- - src/architectures.py   -> build_simple_qnn, build_ttn_qnn, build_mera_qnn, build_qcnn_qnn
- - src/certainty_factor.py -> helpers (optional)
-
 This script:
- - creates/reads balanced processed CSV via your dataset loader
+ - creates/reads balanced processed CSV via the dataset loader
  - builds a QuantumEncoder from the full processed DF (so percentile bins are global)
  - encodes dataset to angles (Nx8)
- - builds QNN qnode using your architectures.* builders and wraps in a torch.nn.Module
- - trains with hinge loss on ±1 labels (paper), logs to W&B
+ - trains with hinge loss on ±1 labels
  - supports a reduced grid search or a single trial via --just_one
 """
 
@@ -39,9 +30,8 @@ from src import encoding as encoding_module
 from src import architectures as archs_module
 from src import certainty_factor as cf_module
 
-# -------------------------
+
 # Column name mapping
-# -------------------------
 # dataset.py uses uppercase NetFlow names (FEATURE_COLUMNS). encoding expects lowercase names.
 COLUMN_RENAME_MAP = {
     "PROTOCOL": "ip_protocol",
@@ -65,9 +55,6 @@ ENCODER_FEATURE_ORDER = [
     "flow_duration",
 ]
 
-# -------------------------
-# Helpers
-# -------------------------
 def map_params_count_for_arch(arch_name: str, n_qubits: int, n_layers: int) -> int:
     """Return expected number of scalar params (6 per two-qubit block) using the same conventions as architectures.py."""
     two_q_params = 6
@@ -288,9 +275,6 @@ def run_one_trial(X_train, y_train, X_val, y_val, cfg: Dict[str, Any]):
     return {"best_val_f1": best_val_f1, "best_ckpt": best_ckpt, "history": history}
 
 
-# -------------------------
-# CLI / main
-# -------------------------
 DEFAULT_CONFIG = {
     "data_csv": "data/processed/nf_unsw_balanced.csv",
     "raw_csv": "data/raw/NF-UNSW-NB15-v2.csv",
