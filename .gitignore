@@ -3,12 +3,14 @@
 .venv/
 __pycache__/
 
+
 # Logs and Temporary Files
 *.log
 *.tmp
 *.bak
 log/
 tmp/
+*.pt
 
 # Build and Distribution Artifacts
 /dist
@@ -19,3 +21,4 @@ tmp/
 *.dll
 
 data/
+wandb/

@@ -55,7 +55,7 @@ class NoiseModel:
 
 def create_noisy_device(n_qubits: int, 
                         noise_model: NoiseModel,
-                        shots: Optional[int] = None) -> qml.Device:
+                        shots: Optional[int] = None):
     """
     Create a PennyLane device with noise simulation.
     
