@@ -11,46 +11,19 @@ Implemented design choices:
   applies repeated Pauli interaction sweeps along the chain
   [result, 0, 1, ..., n_qubits - 1], and measures the result qubit in the X basis.
 - All other architectures measure a single output qubit in the Z basis.
-- Optional gate noise is applied after each operation and optional
-  measurement noise is applied before readout.
+- A utility is provided to visualize circuits with qml.draw_mpl.
 """
 
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 import math
 
 import pennylane as qml
-
-try:
-    import noise as noise_module
-except Exception:
-    noise_module = None
-
-
-# ---------------------------------------------------------------------
-# Noise helpers
-# ---------------------------------------------------------------------
-def _apply_noise(noise_model, wires: List[int]) -> None:
-    """Apply gate noise after an operation when a noise model is available."""
-    if noise_model is None:
-        return
-    if noise_module is None:
-        raise ImportError("noise.py was not found, but noise_model was provided.")
-    noise_module.apply_gate_noise(noise_model, wires)
-
-
-def _apply_measurement_noise(noise_model, wire: int) -> None:
-    """Apply readout noise before measurement when a noise model is available."""
-    if noise_model is None:
-        return
-    if noise_module is None:
-        raise ImportError("noise.py was not found, but noise_model was provided.")
-    noise_module.apply_measurement_noise(noise_model, wire)
 
 
 # ---------------------------------------------------------------------
 # Primitive blocks
 # ---------------------------------------------------------------------
-def _two_qubit_block_rot_cnot(params, wires: List[int], noise_model=None) -> None:
+def _two_qubit_block_rot_cnot(params, wires: List[int]) -> None:
     """
     Generic two-qubit block used in TTN, MERA, and QCNN.
 
@@ -73,13 +46,8 @@ def _two_qubit_block_rot_cnot(params, wires: List[int], noise_model=None) -> Non
     a, b = wires
 
     qml.Rot(params[0], params[1], params[2], wires=a)
-    _apply_noise(noise_model, [a])
-
     qml.Rot(params[3], params[4], params[5], wires=b)
-    _apply_noise(noise_model, [b])
-
     qml.CNOT(wires=[a, b])
-    _apply_noise(noise_model, [a, b])
 
 
 def _simple_layer_terms(layer_type: str) -> List[str]:
@@ -127,7 +95,6 @@ def _apply_simple_pauli_sweep(
     term: str,
     pairs: List[List[int]],
     params,
-    noise_model=None,
 ) -> None:
     """
     Apply one full Pauli sweep across the Simple architecture chain.
@@ -151,8 +118,6 @@ def _apply_simple_pauli_sweep(
             qml.IsingZZ(theta, wires=[a, b])
         else:
             raise ValueError(f"Unknown Simple sweep term '{term}'.")
-
-        _apply_noise(noise_model, [a, b])
 
 
 # ---------------------------------------------------------------------
@@ -292,7 +257,6 @@ def build_simple_qnn(
     dev,
     result_wire: Optional[int] = None,
     shots: Optional[int] = None,
-    noise_model=None,
     layer_type: str = "XXYY",
 ) -> Callable:
     """
@@ -339,13 +303,9 @@ def build_simple_qnn(
 
         for wire in range(n_qubits):
             qml.RX(x[wire], wires=wire)
-            _apply_noise(noise_model, [wire])
 
         qml.Hadamard(wires=result_wire)
-        _apply_noise(noise_model, [result_wire])
-
         qml.PauliZ(wires=result_wire)
-        _apply_noise(noise_model, [result_wire])
 
         idx = 0
         for _ in range(n_layers):
@@ -356,10 +316,8 @@ def build_simple_qnn(
                     term=term,
                     pairs=chain_pairs,
                     params=sweep_params,
-                    noise_model=noise_model,
                 )
 
-        _apply_measurement_noise(noise_model, result_wire)
         return qml.expval(qml.PauliX(result_wire))
 
     return qnode
@@ -369,7 +327,6 @@ def build_ttn_qnn(
     n_qubits: int,
     dev,
     shots: Optional[int] = None,
-    noise_model=None,
 ) -> Callable:
     """
     Build a TTN classifier.
@@ -396,7 +353,6 @@ def build_ttn_qnn(
 
         for wire in range(n_qubits):
             qml.RX(x[wire], wires=wire)
-            _apply_noise(noise_model, [wire])
 
         idx = 0
         active = list(range(n_qubits))
@@ -411,7 +367,7 @@ def build_ttn_qnn(
                 block_params = params[idx : idx + 6]
                 idx += 6
 
-                _two_qubit_block_rot_cnot(block_params, [a, b], noise_model=noise_model)
+                _two_qubit_block_rot_cnot(block_params, [a, b])
                 new_active.append(a)
 
             if len(active) % 2 == 1:
@@ -420,7 +376,6 @@ def build_ttn_qnn(
             active = new_active
 
         out_wire = active[0]
-        _apply_measurement_noise(noise_model, out_wire)
         return qml.expval(qml.PauliZ(out_wire))
 
     return qnode
@@ -431,7 +386,6 @@ def build_mera_qnn(
     n_scales: int,
     dev,
     shots: Optional[int] = None,
-    noise_model=None,
 ) -> Callable:
     """
     Build a MERA-style classifier.
@@ -464,7 +418,6 @@ def build_mera_qnn(
 
         for wire in range(n_qubits):
             qml.RX(x[wire], wires=wire)
-            _apply_noise(noise_model, [wire])
 
         idx = 0
         active = list(range(n_qubits))
@@ -480,7 +433,7 @@ def build_mera_qnn(
                 block_params = params[idx : idx + 6]
                 idx += 6
 
-                _two_qubit_block_rot_cnot(block_params, [a, b], noise_model=noise_model)
+                _two_qubit_block_rot_cnot(block_params, [a, b])
 
             for i in range(0, len(active) - 1, 2):
                 a = active[i]
@@ -489,12 +442,11 @@ def build_mera_qnn(
                 block_params = params[idx : idx + 6]
                 idx += 6
 
-                _two_qubit_block_rot_cnot(block_params, [a, b], noise_model=noise_model)
+                _two_qubit_block_rot_cnot(block_params, [a, b])
 
             active = active[::2]
 
         out_wire = active[0]
-        _apply_measurement_noise(noise_model, out_wire)
         return qml.expval(qml.PauliZ(out_wire))
 
     return qnode
@@ -504,7 +456,6 @@ def build_qcnn_qnn(
     n_qubits: int,
     dev,
     shots: Optional[int] = None,
-    noise_model=None,
 ) -> Callable:
     """
     Build a QCNN classifier with shared parameters across repeated blocks.
@@ -538,7 +489,6 @@ def build_qcnn_qnn(
 
         for wire in range(n_qubits):
             qml.RX(x[wire], wires=wire)
-            _apply_noise(noise_model, [wire])
 
         idx = 0
         active = list(range(n_qubits))
@@ -550,7 +500,7 @@ def build_qcnn_qnn(
             for i in range(0, len(active) - 1, 2):
                 a = active[i]
                 b = active[i + 1]
-                _two_qubit_block_rot_cnot(conv_params, [a, b], noise_model=noise_model)
+                _two_qubit_block_rot_cnot(conv_params, [a, b])
 
             pool_params = params[idx : idx + 6]
             idx += 6
@@ -558,16 +508,71 @@ def build_qcnn_qnn(
             for i in range(0, len(active) - 1, 2):
                 a = active[i]
                 b = active[i + 1]
-                _two_qubit_block_rot_cnot(pool_params, [a, b], noise_model=noise_model)
+                _two_qubit_block_rot_cnot(pool_params, [a, b])
 
             active = active[::2]
 
         final_params = params[idx : idx + 6]
         a, b = active[0], active[1]
-        _two_qubit_block_rot_cnot(final_params, [a, b], noise_model=noise_model)
+        _two_qubit_block_rot_cnot(final_params, [a, b])
 
         out_wire = a
-        _apply_measurement_noise(noise_model, out_wire)
         return qml.expval(qml.PauliZ(out_wire))
 
     return qnode
+
+
+# ---------------------------------------------------------------------
+# Drawing utilities
+# ---------------------------------------------------------------------
+def make_demo_inputs(
+    arch: str,
+    n_qubits: int,
+    n_layers: int = 1,
+    n_scales: int = 1,
+    layer_type: str = "XXYY",
+    interface: str = "torch",
+):
+    """
+    Create zero-valued demo inputs for circuit visualization.
+
+    Returns:
+        x, params
+    """
+    if interface == "torch":
+        import torch
+
+        x = torch.zeros(n_qubits)
+
+        if arch == "simple":
+            params = torch.zeros(simple_num_params(n_qubits, n_layers, layer_type))
+        elif arch == "ttn":
+            params = torch.zeros(ttn_num_params(n_qubits))
+        elif arch == "mera":
+            params = torch.zeros(mera_num_params(n_qubits, n_scales))
+        elif arch == "qcnn":
+            params = torch.zeros(qcnn_num_params(n_qubits))
+        else:
+            raise ValueError(f"Unknown architecture '{arch}'.")
+
+        return x, params
+
+    raise ValueError("Currently only interface='torch' is supported.")
+
+
+def draw_qnn(
+    qnode: Callable,
+    x,
+    params,
+    figsize: Tuple[float, float] = (14, 6),
+    expansion_strategy: str = "device",
+):
+    """
+    Draw a QNode with qml.draw_mpl.
+
+    Example:
+        fig, ax = draw_qnn(qnode, x, params)
+    """
+    fig, ax = qml.draw_mpl(qnode, expansion_strategy=expansion_strategy)(x, params)
+    fig.set_size_inches(*figsize)
+    return fig, ax
