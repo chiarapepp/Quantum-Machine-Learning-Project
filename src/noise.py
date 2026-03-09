@@ -86,7 +86,6 @@ def create_noisy_device(n_qubits: int,
 def apply_gate_noise(noise_model: NoiseModel, wires: List[int]):
     """
     Apply noise channel after a gate operation.
-    
     This should be called after each gate in the circuit to simulate NISQ hardware.
     
     Args:

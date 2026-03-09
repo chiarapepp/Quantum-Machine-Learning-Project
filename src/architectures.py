@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Callable, List, Tuple
+from typing import Callable, List
 import math
 
 import pennylane as qml
@@ -200,7 +200,7 @@ def build_ttn_qnn(
 
             for i in range(0, len(active) - 1, 2):
                 a, b = active[i], active[i + 1]
-                _rot_rot_cnot(params[idx: idx + 6], [a, b])
+                _rot_rot_cnot(params[idx : idx + 6], [a, b])
                 idx += 6
                 new_active.append(a)
 
@@ -244,12 +244,12 @@ def build_mera_qnn(
 
             for i in range(1, len(active) - 1, 2):
                 a, b = active[i], active[i + 1]
-                _rot_rot_cnot(params[idx: idx + 6], [a, b])
+                _rot_rot_cnot(params[idx : idx + 6], [a, b])
                 idx += 6
 
             for i in range(0, len(active) - 1, 2):
                 a, b = active[i], active[i + 1]
-                _rot_rot_cnot(params[idx: idx + 6], [a, b])
+                _rot_rot_cnot(params[idx : idx + 6], [a, b])
                 idx += 6
 
             active = active[::2]
@@ -281,13 +281,13 @@ def build_qcnn_qnn(
         active = list(range(n_qubits))
 
         while len(active) > 2:
-            conv_params = params[idx: idx + 6]
+            conv_params = params[idx : idx + 6]
             idx += 6
 
             for i in range(0, len(active) - 1, 2):
                 _rot_rot_cnot(conv_params, [active[i], active[i + 1]])
 
-            pool_params = params[idx: idx + 6]
+            pool_params = params[idx : idx + 6]
             idx += 6
 
             for i in range(0, len(active) - 1, 2):
@@ -295,21 +295,8 @@ def build_qcnn_qnn(
 
             active = active[::2]
 
-        _rot_rot_cnot(params[idx: idx + 6], [active[0], active[1]])
+        _rot_rot_cnot(params[idx : idx + 6], [active[0], active[1]])
 
         return qml.expval(qml.PauliZ(active[0]))
 
     return qnode
-
-
-def draw_qnn(
-    qnode: Callable,
-    x,
-    params,
-    figsize: Tuple[float, float] = (14, 6),
-    expansion_strategy: str = "device",
-):
-    """Draw a QNode with qml.draw_mpl and return (fig, ax)."""
-    fig, ax = qml.draw_mpl(qnode, expansion_strategy=expansion_strategy)(x, params)
-    fig.set_size_inches(*figsize)
-    return fig, ax

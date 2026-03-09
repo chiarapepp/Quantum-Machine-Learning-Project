@@ -1,55 +1,48 @@
-# src/certainty_factor.py
+from __future__ import annotations
 
-from typing import Iterable, Literal, Optional, Union
+from typing import Iterable, Literal, Union
 
 import numpy as np
 
 
-MeasurementBasis = Literal["Z", "X"]
-ArchitectureName = Literal["ttn", "mera", "qcnn", "simple"]
+MeasurementBasis = Literal["X", "Z"]
+ArchitectureName = Literal["simple", "ttn", "mera", "qcnn"]
 
 
 def measurement_basis_for_architecture(architecture: str) -> MeasurementBasis:
     """
-    Return the correct readout basis for each architecture.
+    Return the readout basis used by the given architecture.
 
     Paper-consistent convention:
-    - TTN, MERA, QCNN -> Z basis
-    - Simple          -> X basis
+    - simple -> X basis
+    - ttn, mera, qcnn -> Z basis
     """
     arch = architecture.strip().lower()
 
-    if arch in {"ttn", "mera", "qcnn"}:
-        return "Z"
     if arch == "simple":
         return "X"
+    if arch in {"ttn", "mera", "qcnn"}:
+        return "Z"
 
     raise ValueError(
         f"Unknown architecture '{architecture}'. "
-        "Supported values: 'ttn', 'mera', 'qcnn', 'simple'."
+        "Supported values: 'simple', 'ttn', 'mera', 'qcnn'."
     )
 
 
 def certainty_from_expval(expval: Union[float, int]) -> float:
     """
-    Convert a measured expectation value into the certainty factor C.
+    Convert an expectation value into the certainty factor C.
 
-    For the architectures in this project, the certainty factor is simply the
-    expectation value of the final measured observable:
+    In this project, the certainty factor is the expectation value of the
+    final measured Pauli observable:
+    - Simple: C = <X>
     - TTN / MERA / QCNN: C = <Z>
-    - Simple:            C = <X>
 
-    The returned value should lie in [-1, 1], up to small numerical error.
+    The result is clipped to [-1, 1] to absorb small numerical noise.
     """
     c = float(expval)
-
-    # Optional small numerical stabilization
-    if c > 1.0 and c < 1.0 + 1e-8:
-        c = 1.0
-    elif c < -1.0 and c > -1.0 - 1e-8:
-        c = -1.0
-
-    return c
+    return float(np.clip(c, -1.0, 1.0))
 
 
 def certainty_from_expval_with_architecture(
@@ -57,10 +50,7 @@ def certainty_from_expval_with_architecture(
     architecture: str,
 ) -> float:
     """
-    Same as certainty_from_expval(), but validates that the architecture is known.
-
-    This is useful when you want the call site to make the architectural choice
-    explicit, even though the computation is just C = expectation value.
+    Same as certainty_from_expval(), but validates the architecture name.
     """
     _ = measurement_basis_for_architecture(architecture)
     return certainty_from_expval(expval)
@@ -68,30 +58,23 @@ def certainty_from_expval_with_architecture(
 
 def certainty_from_samples(samples: Iterable[Union[float, int]]) -> float:
     """
-    Convert sampled eigenvalues of the final observable into the certainty factor.
+    Estimate the certainty factor from sampled Pauli eigenvalues.
 
-    Expected samples:
-    - from qml.sample(qml.PauliZ(...)) for TTN / MERA / QCNN
-    - from qml.sample(qml.PauliX(...)) for Simple
+    Expected input:
+    - samples from qml.sample(qml.PauliX(...)) for Simple
+    - samples from qml.sample(qml.PauliZ(...)) for TTN / MERA / QCNN
 
-    In both cases, PennyLane returns eigenvalues in {+1, -1}, and the certainty
-    factor is their mean:
-        C = mean(samples)
-
-    This estimates the corresponding expectation value.
+    PennyLane returns eigenvalues in {-1, +1}, and the certainty factor is
+    their mean.
     """
     s = np.asarray(list(samples), dtype=float)
 
     if s.size == 0:
         raise ValueError("certainty_from_samples received an empty sample array.")
 
-    unique_vals = np.unique(s)
-    allowed = {-1.0, 1.0}
-
-    if not set(unique_vals).issubset(allowed):
-        raise ValueError(
-            "Samples must be eigenvalues of a Pauli observable, i.e. only ±1."
-        )
+    unique_vals = set(np.unique(s).tolist())
+    if not unique_vals.issubset({-1.0, 1.0}):
+        raise ValueError("Samples must contain only Pauli eigenvalues ±1.")
 
     return float(np.mean(s))
 
@@ -101,56 +84,60 @@ def certainty_from_samples_with_architecture(
     architecture: str,
 ) -> float:
     """
-    Same as certainty_from_samples(), but validates that the architecture is known.
-
-    The architecture determines which observable should have been sampled:
-    - TTN / MERA / QCNN -> PauliZ
-    - Simple            -> PauliX
+    Same as certainty_from_samples(), but validates the architecture name.
     """
     _ = measurement_basis_for_architecture(architecture)
     return certainty_from_samples(samples)
 
 
 def predicted_label_from_certainty(
-    C: float,
+    certainty: Union[float, int],
     zero_class_label: int = 0,
     one_class_label: int = 1,
     threshold: float = 0.0,
 ) -> int:
     """
-    Convert certainty factor into a predicted class label.
+    Convert a certainty factor into a predicted label.
 
-    Interpretation:
-    - C >= threshold -> prediction is aligned with the '0-like' outcome
-    - C <  threshold -> prediction is aligned with the '1-like' outcome
-
-    By default:
-    - outcome |0> (or positive-side outcome in the chosen basis) -> label 0
-    - outcome |1> (or negative-side outcome in the chosen basis) -> label 1
-
-    Parameters
-    ----------
-    C:
-        Certainty factor in [-1, 1].
-    zero_class_label:
-        Dataset label associated with the positive side of the readout.
-    one_class_label:
-        Dataset label associated with the negative side of the readout.
-    threshold:
-        Decision threshold, default 0.0 as in the paper's sign-based decision rule.
+    Default paper-consistent rule:
+    - C >= 0 -> label 0
+    - C <  0 -> label 1
     """
-    return zero_class_label if float(C) >= float(threshold) else one_class_label
+    c = float(certainty)
+    return zero_class_label if c >= float(threshold) else one_class_label
 
 
-def confidence_from_certainty(C: float) -> float:
+def predicted_labels_from_certainties(
+    certainties: Iterable[Union[float, int]],
+    zero_class_label: int = 0,
+    one_class_label: int = 1,
+    threshold: float = 0.0,
+) -> np.ndarray:
     """
-    Convert certainty factor into a confidence magnitude.
-
-    Returns |C| in [0, 1]:
-    - 0   -> maximally uncertain / flat prediction
-    - 1   -> maximally sharp / confident prediction
+    Vectorized helper that converts a sequence of certainty factors into
+    a numpy array of predicted labels.
     """
-    return abs(float(C))
+    cs = np.asarray(list(certainties), dtype=float)
+    return np.where(cs >= float(threshold), zero_class_label, one_class_label).astype(int)
+
+
+def confidence_from_certainty(certainty: Union[float, int]) -> float:
+    """
+    Return the confidence magnitude associated with the certainty factor.
+
+    This is |C| in [0, 1]:
+    - 0 -> maximally uncertain
+    - 1 -> maximally confident
+    """
+    return float(abs(float(certainty)))
+
+
+def confidences_from_certainties(certainties: Iterable[Union[float, int]]) -> np.ndarray:
+    """
+    Vectorized helper that returns |C| for each certainty factor.
+    """
+    cs = np.asarray(list(certainties), dtype=float)
+    return np.abs(cs)
 
 
 def prediction_and_confidence_from_expval(
@@ -162,19 +149,16 @@ def prediction_and_confidence_from_expval(
     """
     Convenience helper returning:
     (predicted_label, certainty_factor, confidence)
-
-    This is architecture-agnostic once the correct observable expectation value
-    has already been computed by the QNode.
     """
-    C = certainty_from_expval(expval)
+    c = certainty_from_expval(expval)
     pred = predicted_label_from_certainty(
-        C,
+        c,
         zero_class_label=zero_class_label,
         one_class_label=one_class_label,
         threshold=threshold,
     )
-    conf = confidence_from_certainty(C)
-    return pred, C, conf
+    conf = confidence_from_certainty(c)
+    return pred, c, conf
 
 
 def prediction_and_confidence_from_samples(
@@ -186,15 +170,14 @@ def prediction_and_confidence_from_samples(
     """
     Convenience helper returning:
     (predicted_label, certainty_factor, confidence)
-
-    Works from sampled ±1 eigenvalues of the final measured observable.
+    from sampled Pauli eigenvalues.
     """
-    C = certainty_from_samples(samples)
+    c = certainty_from_samples(samples)
     pred = predicted_label_from_certainty(
-        C,
+        c,
         zero_class_label=zero_class_label,
         one_class_label=one_class_label,
         threshold=threshold,
     )
-    conf = confidence_from_certainty(C)
-    return pred, C, conf
+    conf = confidence_from_certainty(c)
+    return pred, c, conf

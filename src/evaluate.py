@@ -1,36 +1,25 @@
-# src/evaluate.py
-"""
-Evaluation utilities for the QNN intrusion detection system.
-
-Separated from train.py so evaluation logic can be reused by:
-  - train.py  (val loop)
-  - noise_eval.py  (noisy inference)
-  - run_experiment.py  (grid-search summary)
-
-Key design choices that match the paper:
-  - Certainty factor C = expectation value of the measured observable.
-  - For Simple (X-basis): C = <X>  in [-1, +1]
-  - For TTN/MERA/QCNN (Z-basis): C = <Z>  in [-1, +1]
-  - Prediction: C >= 0  ->  benign (label 0);  C < 0  ->  malicious (label 1).
-    (malicious maps to the negative side; see paper Section III-C and Listing 1.)
-  - Metrics: F1 (primary), accuracy, precision, recall, ROC-AUC.
-"""
-
 from __future__ import annotations
-from typing import Dict, Any
+
+from typing import Any, Dict
 
 import numpy as np
 import torch
-from torch.utils.data import TensorDataset, DataLoader
+from torch.utils.data import DataLoader, TensorDataset
 from sklearn.metrics import (
-    f1_score, accuracy_score, precision_score, recall_score, roc_auc_score,
+    accuracy_score,
+    f1_score,
+    precision_score,
+    recall_score,
+    roc_auc_score,
 )
 from tqdm import tqdm
 
+from certainty_factor import (
+    certainty_from_expval,
+    predicted_labels_from_certainties,
+    confidences_from_certainties,
+)
 
-# ---------------------------------------------------------------------------
-# Core evaluation
-# ---------------------------------------------------------------------------
 
 def evaluate_model(
     model: torch.nn.Module,
@@ -41,103 +30,119 @@ def evaluate_model(
     desc: str = "eval",
 ) -> Dict[str, Any]:
     """
-    Run inference on (X, y) and return a metrics dict.
+    Run inference on a dataset and return standard classification metrics.
 
-    model.forward(x_batch) must return a 1-D tensor of certainty factors C in [-1, 1].
+    Assumptions
+    -----------
+    model.forward(x_batch) returns one scalar per sample representing the
+    final expectation value of the measured observable, which is also the
+    certainty factor C in [-1, 1].
 
-    Prediction rule (paper-consistent):
-        C >= 0  ->  0 (benign)
-        C <  0  ->  1 (malicious)
+    Default decision rule
+    ---------------------
+    - C >= 0 -> benign  (label 0)
+    - C <  0 -> malicious (label 1)
 
     Returns
     -------
-    dict with keys:
+    dict with:
         f1, accuracy, precision, recall, roc_auc,
         cert_mean, cert_std,
-        Cs  (raw certainty factor array),
-        y   (ground truth array),
-        preds (predicted label array)
+        conf_mean, conf_std,
+        Cs, confidence, y, preds
     """
     model.eval()
-    ds     = TensorDataset(
+
+    ds = TensorDataset(
         torch.tensor(X, dtype=torch.float32),
         torch.tensor(y, dtype=torch.long),
     )
     loader = DataLoader(ds, batch_size=batch_size, shuffle=False)
 
-    all_C: list[np.ndarray] = []
-    all_y: list[np.ndarray] = []
+    all_c = []
+    all_y = []
 
     with torch.no_grad():
         for xb, yb in tqdm(loader, desc=desc, leave=False):
-            xb  = xb.to(device)
-            out = model(xb).cpu().numpy()
-            all_C.append(out)
+            xb = xb.to(device)
+            out = model(xb)
+
+            if isinstance(out, torch.Tensor):
+                out_np = out.detach().cpu().numpy()
+            else:
+                out_np = np.asarray(out, dtype=float)
+
+            all_c.append(out_np.reshape(-1))
             all_y.append(yb.numpy())
 
-    Cs    = np.concatenate(all_C)
-    ys    = np.concatenate(all_y)
-    preds = (Cs < 0).astype(int)    # C < 0 -> malicious (label 1)
+    Cs_raw = np.concatenate(all_c)
+    ys = np.concatenate(all_y)
 
-    f1   = f1_score(ys, preds, zero_division=0)
-    acc  = accuracy_score(ys, preds)
+    Cs = np.array([certainty_from_expval(v) for v in Cs_raw], dtype=float)
+    preds = predicted_labels_from_certainties(Cs)
+    confs = confidences_from_certainties(Cs)
+
+    f1 = f1_score(ys, preds, zero_division=0)
+    acc = accuracy_score(ys, preds)
     prec = precision_score(ys, preds, zero_division=0)
-    rec  = recall_score(ys, preds, zero_division=0)
+    rec = recall_score(ys, preds, zero_division=0)
+
     try:
-        # Map C -> probability-like score: high C (benign) -> low prob of class 1
-        roc = roc_auc_score(ys, (-Cs + 1) / 2.0)
+        # Higher certainty on the positive side means lower probability of class 1.
+        # Convert C in [-1, 1] into a score in [0, 1] for class 1.
+        malicious_score = (-Cs + 1.0) / 2.0
+        roc = roc_auc_score(ys, malicious_score)
     except Exception:
         roc = float("nan")
 
     return {
-        "f1":        float(f1),
-        "accuracy":  float(acc),
+        "f1": float(f1),
+        "accuracy": float(acc),
         "precision": float(prec),
-        "recall":    float(rec),
-        "roc_auc":   float(roc),
+        "recall": float(rec),
+        "roc_auc": float(roc),
         "cert_mean": float(np.mean(Cs)),
-        "cert_std":  float(np.std(Cs)),
-        "Cs":        Cs,
-        "y":         ys,
-        "preds":     preds,
+        "cert_std": float(np.std(Cs)),
+        "conf_mean": float(np.mean(confs)),
+        "conf_std": float(np.std(confs)),
+        "Cs": Cs,
+        "confidence": confs,
+        "y": ys,
+        "preds": preds,
     }
 
 
-# ---------------------------------------------------------------------------
-# Certainty-factor analysis (paper Section III-C, Fig. 7 & 8)
-# ---------------------------------------------------------------------------
-
-def certainty_factor_from_expval(expval: float) -> float:
+def certainty_stats(
+    certainties: np.ndarray,
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+) -> Dict[str, Any]:
     """
-    C = expectation value of the measured Pauli observable.
+    Compute certainty-factor statistics split by correct and incorrect predictions.
 
-    For a sample with true label 0 (benign -> |0> expected):
-        C = |alpha_0|^2 - |alpha_1|^2 = <Z>  (or <X> for Simple).
-    C = +1: maximally confident correct prediction.
-    C = -1: maximally confident wrong prediction.
-    C =  0: maximally uncertain.
+    Useful for reproducing certainty analyses similar to the paper's discussion:
+    correct predictions tend to concentrate farther from zero, while low-|C|
+    predictions are more vulnerable to noise.
     """
-    c = float(expval)
-    return float(np.clip(c, -1.0, 1.0))
+    Cs = np.asarray(certainties, dtype=float)
+    yt = np.asarray(y_true, dtype=int)
+    yp = np.asarray(y_pred, dtype=int)
 
-
-def certainty_stats(Cs: np.ndarray, y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, Any]:
-    """
-    Compute certainty-factor statistics split by correct / incorrect predictions.
-
-    Useful for reproducing Fig. 7 (violin plots) and Fig. 8 (histogram) from the paper.
-    """
-    correct   = y_true == y_pred
-    incorrect = ~correct
+    correct_mask = yt == yp
+    incorrect_mask = ~correct_mask
+    confs = np.abs(Cs)
 
     return {
-        "all_mean":       float(np.mean(Cs)),
-        "all_std":        float(np.std(Cs)),
-        "correct_mean":   float(np.mean(Cs[correct]))   if correct.any()   else float("nan"),
-        "correct_std":    float(np.std(Cs[correct]))    if correct.any()   else float("nan"),
-        "incorrect_mean": float(np.mean(Cs[incorrect])) if incorrect.any() else float("nan"),
-        "incorrect_std":  float(np.std(Cs[incorrect]))  if incorrect.any() else float("nan"),
-        # fraction of low-confidence predictions (susceptible to noise flips)
-        "frac_low_conf_0.2": float(np.mean(np.abs(Cs) < 0.2)),
-        "frac_low_conf_0.5": float(np.mean(np.abs(Cs) < 0.5)),
+        "all_mean": float(np.mean(Cs)),
+        "all_std": float(np.std(Cs)),
+        "all_conf_mean": float(np.mean(confs)),
+        "all_conf_std": float(np.std(confs)),
+        "correct_mean": float(np.mean(Cs[correct_mask])) if correct_mask.any() else float("nan"),
+        "correct_std": float(np.std(Cs[correct_mask])) if correct_mask.any() else float("nan"),
+        "incorrect_mean": float(np.mean(Cs[incorrect_mask])) if incorrect_mask.any() else float("nan"),
+        "incorrect_std": float(np.std(Cs[incorrect_mask])) if incorrect_mask.any() else float("nan"),
+        "correct_conf_mean": float(np.mean(confs[correct_mask])) if correct_mask.any() else float("nan"),
+        "incorrect_conf_mean": float(np.mean(confs[incorrect_mask])) if incorrect_mask.any() else float("nan"),
+        "frac_low_conf_0.2": float(np.mean(confs < 0.2)),
+        "frac_low_conf_0.5": float(np.mean(confs < 0.5)),
     }
