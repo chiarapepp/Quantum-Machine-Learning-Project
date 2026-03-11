@@ -1,136 +1,165 @@
+from __future__ import annotations
+from typing import Dict, Iterable, List, Sequence
 import numpy as np
+import pandas as pd
 import pennylane as qml
 
-# 0.25 degree in radians (rotation granularity)
-ANGLE_QUANTUM = np.deg2rad(0.25)  # ≈ 0.004363323
 
-# 8 features (names expected in the DataFrame passed to the encoder)
-FEATURES = [
-    "ip_protocol",
-    "tcp_flags",
-    "layer7_protocol",
-    "in_bytes",
-    "out_bytes",
-    "in_packets",
-    "out_packets",
-    "flow_duration",
+ANGLE_QUANTUM = np.deg2rad(0.25)  # every angle is a multiple of this, per the paper's encoding scheme
+
+FEATURE_COLUMNS = [
+    "PROTOCOL",
+    "TCP_FLAGS",
+    "L7_PROTO",
+    "IN_BYTES",
+    "OUT_BYTES",
+    "IN_PKTS",
+    "OUT_PKTS",
+    "FLOW_DURATION_MILLISECONDS",
 ]
 
-# Features that are categorical-ish (few unique values)
 CATEGORICAL_FEATURES = [
-    "ip_protocol",
-    "tcp_flags",
-    "layer7_protocol",
+    "PROTOCOL",
+    "TCP_FLAGS",
+    "L7_PROTO",
 ]
 
-# Continuous numeric features → percentile binning
 CONTINUOUS_FEATURES = [
-    "in_bytes",
-    "out_bytes",
-    "in_packets",
-    "out_packets",
-    "flow_duration",
+    "IN_BYTES",
+    "OUT_BYTES",
+    "IN_PKTS",
+    "OUT_PKTS",
+    "FLOW_DURATION_MILLISECONDS",
 ]
 
 
 class QuantumEncoder:
-    """Paper-faithful feature→angle encoder.
+    """
+    Classical-to-quantum feature encoder for NF-UNSW-NB15.
 
-    Implements the encoding procedure described in the paper:
-      - one qubit per feature
-      - RX rotations only
-      - angle in [0, π]
-      - categorical features → evenly spaced angles
-      - continuous features → percentile binning
-      - quantization to granularity = 0.25° (ANGLE_QUANTUM)
+    Encoding rules follow the paper:
+    - one qubit per feature
+    - one RX rotation per feature
+    - projected angle in [0, pi]
+    - angle quantization with 0.25 degree granularity
+    - low-cardinality features are mapped categorically
+    - high-cardinality features are mapped by percentile binning
 
-    Notes:
-      - Fit the encoder on TRAIN data only, then use encode_dataset(test_df)
-        to avoid data leakage.
-      - Unseen categorical values at transform time are mapped to the first
-        known category (index 0) to avoid KeyErrors.
+    Fit on the training set only, then reuse the fitted encoder on validation
+    and test sets.
     """
 
-    def __init__(self, df, n_bins: int = 100):
-        """Fit encoder statistics from a pandas DataFrame containing FEATURES."""
+    def __init__(self, n_bins: int = 100):
+        if n_bins < 2:
+            raise ValueError("n_bins must be at least 2.")
+
         self.n_bins = int(n_bins)
-        if self.n_bins < 2:
-            raise ValueError("n_bins must be >= 2")
+        self.cat_maps: Dict[str, Dict[float, int]] = {}
+        self.percentile_edges: Dict[str, np.ndarray] = {}
+        self.is_fitted = False
 
-        self.bin_edges = {}  # col -> np.ndarray of edges length (n_bins+1)
-        self.cat_maps = {}   # col -> dict(value -> index)
-        self._fit(df)
+    def fit(self, df: pd.DataFrame) -> "QuantumEncoder":
 
-    def _fit(self, df):
-        # Prepare encodings using the provided df (ideally: training set only)
-        self._prepare_categorical(df)
-        self._prepare_continuous(df)
+        self._validate_dataframe(df)
 
-    # ---- Categorical preparation
-    def _prepare_categorical(self, df):
         for col in CATEGORICAL_FEATURES:
-            values = sorted(df[col].unique())
-            self.cat_maps[col] = {v: i for i, v in enumerate(values)}
+            values = pd.to_numeric(df[col], errors="raise").astype(float).to_numpy()
+            unique_values = np.unique(values)
+            self.cat_maps[col] = {
+                float(value): idx for idx, value in enumerate(sorted(unique_values))
+            }
 
-    # ---- Continuous preparation
-    def _prepare_continuous(self, df):
+        percentiles = np.linspace(0.0, 100.0, self.n_bins + 1)
+
         for col in CONTINUOUS_FEATURES:
-            percentiles = np.linspace(0, 100, self.n_bins + 1)
-            self.bin_edges[col] = np.percentile(df[col], percentiles)
+            values = pd.to_numeric(df[col], errors="raise").astype(float).to_numpy()
+            edges = np.percentile(values, percentiles)
+            self.percentile_edges[col] = np.asarray(edges, dtype=float)
 
-    # ---- Quantization helper
-    def _quantize(self, theta: float) -> float:
-        # Paper: quantize to multiples of 0.25°
-        qt = np.round(theta / ANGLE_QUANTUM) * ANGLE_QUANTUM
-        # Keep within [0, π] after rounding
-        return float(np.clip(qt, 0.0, np.pi))
+        self.is_fitted = True
+        return self
 
-    # ---- Value → θ mapping
-    def _encode_categorical(self, col, value):
+    def fit_transform(self, df: pd.DataFrame) -> np.ndarray:
+        """Fit the encoder on df and return the encoded angles."""
+        return self.fit(df).transform(df)
+
+    def transform(self, df: pd.DataFrame) -> np.ndarray:
+        """
+        Encode a DataFrame into an (N, 8) array of RX angles.
+        """
+        self._check_is_fitted()
+        self._validate_dataframe(df)
+
+        encoded_rows = [self.encode_sample(row) for _, row in df.iterrows()]
+        return np.vstack(encoded_rows).astype(float)
+
+    def encode_sample(self, row: pd.Series | Dict[str, float]) -> np.ndarray:
+        """
+        Encode one sample into eight angles.
+        """
+        self._check_is_fitted()
+
+        angles: List[float] = []
+        for col in FEATURE_COLUMNS:
+            value = float(row[col])
+
+            if col in CATEGORICAL_FEATURES:
+                theta = self._encode_categorical(col, value)
+            else:
+                theta = self._encode_continuous(col, value)
+
+            angles.append(theta)
+
+        return np.asarray(angles, dtype=float)
+
+    def _encode_categorical(self, col: str, value: float) -> float:
+        """
+        Map a low-cardinality feature categorically into [0, pi].
+        """
         mapping = self.cat_maps[col]
+
+        if value not in mapping:
+            raise ValueError(
+                f"Unseen categorical value {value} for column '{col}'. "
+                "Fit the encoder on training data that contains this value "
+                "or explicitly handle unseen values in your preprocessing."
+            )
+
+        index = mapping[value]
         n_unique = len(mapping)
 
-        # Robustness: unseen categories in test → map to index 0
-        index = mapping.get(value, 0)
-
-        # Evenly spaced in [0, π]
-        if n_unique > 1:
-            theta = (index / (n_unique - 1)) * np.pi
-        else:
+        if n_unique == 1:
             theta = 0.0
+        else:
+            theta = (index / (n_unique - 1)) * np.pi
+
         return self._quantize(theta)
 
-    def _encode_continuous(self, col, value):
-        edges = self.bin_edges[col]
-        # find which bin value belongs to
+    def _encode_continuous(self, col: str, value: float) -> float:
+        """
+        Map a continuous feature by percentile binning.
+
+        If [0, pi] is split into B bins and the value falls in bin k,
+        then theta = k * pi / B, matching the paper's example.
+        """
+        edges = self.percentile_edges[col]
+
         bin_index = np.searchsorted(edges, value, side="right") - 1
         bin_index = int(np.clip(bin_index, 0, self.n_bins - 1))
 
-        # Map bin index to [0, π] (inclusive)
-        denom = (self.n_bins - 1)
-        theta = (bin_index / denom) * np.pi if denom > 0 else 0.0
+        theta = (bin_index * np.pi) / self.n_bins
         return self._quantize(theta)
 
-    # ---- Public API
-    def encode_sample(self, row):
-        """Return an array of 8 angles for one sample (row can be Series or dict-like)."""
-        angles = []
-        for col in FEATURES:
-            val = row[col]
-            if col in CATEGORICAL_FEATURES:
-                angles.append(self._encode_categorical(col, val))
-            else:
-                angles.append(self._encode_continuous(col, val))
-        return np.array(angles, dtype=float)
+    def _quantize(self, theta: float) -> float:
+        """
+        Quantize an angle to the paper's 0.25 degree granularity.
+        """
+        quantized = np.round(theta / ANGLE_QUANTUM) * ANGLE_QUANTUM
+        return float(np.clip(quantized, 0.0, np.pi))
 
-    def encode_dataset(self, df):
-        """Encode a DataFrame -> (N, 8) numpy array of angles."""
-        # iterrows is fine for clarity; can be optimized later if needed
-        return np.vstack([self.encode_sample(row) for _, row in df.iterrows()])
-
-
-# Quantum circuit encoding
-def apply_rx_encoding(x):
-    """Apply RX(θ) on each qubit according to encoded angles x."""
-    for i, theta in enumerate(x):
-        qml.RX(theta, wires=i)
+def apply_rx_encoding(x: Sequence[float]) -> None:
+    """
+    Apply the paper's feature encoding circuit: one RX rotation per qubit.
+    """
+    for wire, theta in enumerate(x):
+        qml.RX(theta, wires=wire)

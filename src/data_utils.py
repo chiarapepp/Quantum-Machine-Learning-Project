@@ -1,18 +1,15 @@
-# src/data_utils.py
 """
 Data loading and quantum encoding utilities.
-
 Separates data preparation from training logic so it can be reused by
 train.py, noise_eval.py, and run_experiment.py without duplication.
 """
 
 from __future__ import annotations
 from typing import Dict
-
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
-
+from sklearn.model_selection import train_test_splig
+t
 import encoding as enc_module
 
 
