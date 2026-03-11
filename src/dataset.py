@@ -1,25 +1,10 @@
-"""
-Dataset loader for NF-UNSW-NB15 NetFlow data used in
-"Network Anomaly Detection Using Quantum Neural Networks on Noisy Quantum Computers".
-
-This module:
-- loads the NF-UNSW-NB15 NetFlow CSV
-- keeps the 8 features used in the paper
-- uses the dataset Label column directly (0 = benign, 1 = malicious)
-- removes rows with missing or non-numeric feature values
-- balances the dataset by downsampling benign flows with random_state=123
-- performs an 85/15 train-test split with random_state=1
-"""
-
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import Optional
 import os
 import warnings
 
-import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
 from sklearn.utils import resample
 
 
@@ -37,25 +22,30 @@ FEATURE_COLUMNS = [
 LABEL_COLUMN = "Label"
 
 
-def load_and_prepare_nf_unsw(
+def build_processed_nf_unsw(
     csv_path: str,
     save_processed_csv: Optional[str] = None,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> pd.DataFrame:
     """
-    Load NF-UNSW-NB15 NetFlow data, keep the paper features, balance the classes,
-    and return train/test numpy arrays.
+    Load the raw NF-UNSW-NB15 CSV, keep the 8 paper features, clean invalid rows,
+    balance the classes by downsampling benign traffic, and return the balanced
+    processed DataFrame.
+
+    This function does NOT perform any train/test split.
+    Splitting is delegated to data_utils.py to avoid duplication and leakage.
 
     Parameters
     ----------
     csv_path:
         Path to the raw NF-UNSW-NB15 CSV file.
     save_processed_csv:
-        Optional output path for the balanced processed CSV.
+        Optional output path where the balanced processed CSV will be saved.
 
     Returns
     -------
-    X_train, X_test, y_train, y_test
-        Train/test split as numpy arrays.
+    pd.DataFrame
+        Balanced processed DataFrame with columns:
+        FEATURE_COLUMNS + [LABEL_COLUMN]
     """
     if not os.path.exists(csv_path):
         raise FileNotFoundError(f"CSV not found: {csv_path}")
@@ -77,9 +67,7 @@ def load_and_prepare_nf_unsw(
     df = df.dropna()
     n_dropped_nan = n_before - len(df)
     if n_dropped_nan > 0:
-        warnings.warn(
-            f"Dropped {n_dropped_nan} rows with missing values."
-        )
+        warnings.warn(f"Dropped {n_dropped_nan} rows with missing values.")
 
     for col in FEATURE_COLUMNS:
         df[col] = pd.to_numeric(df[col], errors="coerce")
@@ -90,16 +78,17 @@ def load_and_prepare_nf_unsw(
     df = df.dropna()
     n_dropped_non_numeric = n_before - len(df)
     if n_dropped_non_numeric > 0:
-        warnings.warn(
-            f"Dropped {n_dropped_non_numeric} rows with non-numeric values."
-        )
+        warnings.warn(f"Dropped {n_dropped_non_numeric} rows with non-numeric values.")
 
+    # enforce numeric dtypes explicitly
+    for col in FEATURE_COLUMNS:
+        df[col] = df[col].astype(float)
     df[LABEL_COLUMN] = df[LABEL_COLUMN].astype(int)
 
     unique_labels = sorted(df[LABEL_COLUMN].unique().tolist())
     if unique_labels != [0, 1]:
         raise ValueError(
-            f"Expected Label column to contain only [0, 1], found {unique_labels}"
+            f"Expected Label column to contain only [0, 1], found {unique_labels}."
         )
 
     n_benign = int((df[LABEL_COLUMN] == 0).sum())
@@ -119,7 +108,7 @@ def load_and_prepare_nf_unsw(
     if len(benign_df) < len(malicious_df):
         raise ValueError(
             "Benign class has fewer samples than malicious class. "
-            "This loader expects the original NF-UNSW-NB15 class imbalance."
+            "This loader expects the original NF-UNSW-NB15 imbalance."
         )
 
     benign_downsampled = resample(
@@ -143,45 +132,27 @@ def load_and_prepare_nf_unsw(
             f"but found {len(balanced_df):,}."
         )
 
-    X = balanced_df[FEATURE_COLUMNS].to_numpy(dtype=float)
-    y = balanced_df[LABEL_COLUMN].to_numpy(dtype=int)
-
-    X_train, X_test, y_train, y_test = train_test_split(
-        X,
-        y,
-        test_size=0.15,
-        random_state=1,
-        shuffle=True,
-        stratify=y,
-    )
-
-    print(
-        f"[dataset] Split -> train: {len(X_train):,} rows, "
-        f"test: {len(X_test):,} rows."
-    )
-
     if save_processed_csv is not None:
         out_dir = os.path.dirname(save_processed_csv)
         if out_dir:
             os.makedirs(out_dir, exist_ok=True)
 
-        processed_df = pd.DataFrame(X, columns=FEATURE_COLUMNS)
-        processed_df[LABEL_COLUMN] = y
-        processed_df.to_csv(save_processed_csv, index=False)
+        balanced_df.to_csv(save_processed_csv, index=False)
         print(f"[dataset] Saved balanced processed CSV to: {save_processed_csv}")
 
-    return X_train, X_test, y_train, y_test
+    return balanced_df
 
 
 if __name__ == "__main__":
     sample_path = os.path.join("data", "raw", "NF-UNSW-NB15-v2.csv")
+    output_path = os.path.join("data", "processed", "nf_unsw_balanced.csv")
 
     if os.path.exists(sample_path):
-        X_train, X_test, y_train, y_test = load_and_prepare_nf_unsw(
+        df_processed = build_processed_nf_unsw(
             sample_path,
-            save_processed_csv="data/processed/nf_unsw_balanced.csv",
+            save_processed_csv=output_path,
         )
-        print("Shapes:", X_train.shape, X_test.shape, y_train.shape, y_test.shape)
+        print(f"[dataset] Final processed shape: {df_processed.shape}")
     else:
         print(
             "No CSV found at data/raw/NF-UNSW-NB15-v2.csv. "

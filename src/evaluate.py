@@ -16,7 +16,7 @@ from tqdm import tqdm
 
 from certainty_factor import (
     certainty_from_expval,
-    predicted_labels_from_certainties,
+    predict_many_from_certainty,
     confidences_from_certainties,
 )
 
@@ -28,6 +28,9 @@ def evaluate_model(
     batch_size: int = 64,
     device: str = "cpu",
     desc: str = "eval",
+    threshold: float = 0.0,
+    positive_class_label: int = 0,
+    negative_class_label: int = 1,
 ) -> Dict[str, Any]:
     """
     Run inference on a dataset and return standard classification metrics.
@@ -40,8 +43,12 @@ def evaluate_model(
 
     Default decision rule
     ---------------------
-    - C >= 0 -> benign  (label 0)
-    - C <  0 -> malicious (label 1)
+    - C >= threshold -> positive_class_label
+    - C <  threshold -> negative_class_label
+
+    With the current project convention:
+    - positive_class_label = 0  -> benign
+    - negative_class_label = 1  -> malicious
 
     Returns
     -------
@@ -53,14 +60,17 @@ def evaluate_model(
     """
     model.eval()
 
+    X = np.asarray(X)
+    y = np.asarray(y, dtype=int)
+
     ds = TensorDataset(
         torch.tensor(X, dtype=torch.float32),
         torch.tensor(y, dtype=torch.long),
     )
     loader = DataLoader(ds, batch_size=batch_size, shuffle=False)
 
-    all_c = []
-    all_y = []
+    all_c: list[np.ndarray] = []
+    all_y: list[np.ndarray] = []
 
     with torch.no_grad():
         for xb, yb in tqdm(loader, desc=desc, leave=False):
@@ -72,14 +82,23 @@ def evaluate_model(
             else:
                 out_np = np.asarray(out, dtype=float)
 
-            all_c.append(out_np.reshape(-1))
-            all_y.append(yb.numpy())
+            all_c.append(np.asarray(out_np, dtype=float).reshape(-1))
+            all_y.append(yb.detach().cpu().numpy().reshape(-1))
 
-    Cs_raw = np.concatenate(all_c)
-    ys = np.concatenate(all_y)
+    if not all_c:
+        raise ValueError("Empty dataset passed to evaluate_model().")
+
+    Cs_raw = np.concatenate(all_c, axis=0)
+    ys = np.concatenate(all_y, axis=0)
 
     Cs = np.array([certainty_from_expval(v) for v in Cs_raw], dtype=float)
-    preds = predicted_labels_from_certainties(Cs)
+
+    preds = predict_many_from_certainty(
+        Cs,
+        positive_class_label=positive_class_label,
+        negative_class_label=negative_class_label,
+        threshold=threshold,
+    )
     confs = confidences_from_certainties(Cs)
 
     f1 = f1_score(ys, preds, zero_division=0)
@@ -88,8 +107,13 @@ def evaluate_model(
     rec = recall_score(ys, preds, zero_division=0)
 
     try:
-        # Higher certainty on the positive side means lower probability of class 1.
-        # Convert C in [-1, 1] into a score in [0, 1] for class 1.
+        # Build a score for class 1 (malicious) so roc_auc_score is consistent.
+        #
+        # Under the default rule:
+        #   C >= 0 -> class 0 (benign)
+        #   C <  0 -> class 1 (malicious)
+        #
+        # So larger maliciousness should correspond to smaller C.
         malicious_score = (-Cs + 1.0) / 2.0
         roc = roc_auc_score(ys, malicious_score)
     except Exception:
@@ -120,13 +144,15 @@ def certainty_stats(
     """
     Compute certainty-factor statistics split by correct and incorrect predictions.
 
-    Useful for reproducing certainty analyses similar to the paper's discussion:
-    correct predictions tend to concentrate farther from zero, while low-|C|
-    predictions are more vulnerable to noise.
+    Useful for analysing whether correct predictions tend to lie farther from 0,
+    while uncertain predictions concentrate near 0.
     """
     Cs = np.asarray(certainties, dtype=float)
     yt = np.asarray(y_true, dtype=int)
     yp = np.asarray(y_pred, dtype=int)
+
+    if not (len(Cs) == len(yt) == len(yp)):
+        raise ValueError("certainties, y_true, and y_pred must have the same length.")
 
     correct_mask = yt == yp
     incorrect_mask = ~correct_mask
@@ -142,7 +168,9 @@ def certainty_stats(
         "incorrect_mean": float(np.mean(Cs[incorrect_mask])) if incorrect_mask.any() else float("nan"),
         "incorrect_std": float(np.std(Cs[incorrect_mask])) if incorrect_mask.any() else float("nan"),
         "correct_conf_mean": float(np.mean(confs[correct_mask])) if correct_mask.any() else float("nan"),
+        "correct_conf_std": float(np.std(confs[correct_mask])) if correct_mask.any() else float("nan"),
         "incorrect_conf_mean": float(np.mean(confs[incorrect_mask])) if incorrect_mask.any() else float("nan"),
+        "incorrect_conf_std": float(np.std(confs[incorrect_mask])) if incorrect_mask.any() else float("nan"),
         "frac_low_conf_0.2": float(np.mean(confs < 0.2)),
         "frac_low_conf_0.5": float(np.mean(confs < 0.5)),
     }
