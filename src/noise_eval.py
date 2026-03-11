@@ -10,6 +10,9 @@ import pennylane as qml
 import pennylane.noise as qnoise
 import torch
 
+import architectures as archs
+from encoding import apply_rx_encoding
+from certainty_factor import certainty_from_samples
 import evaluate as eval_module
 import data_utils
 
@@ -22,51 +25,6 @@ PAPER_NOISE_LEVELS: Dict[str, float] = {
     "high": 0.050,
     "very_high": 0.100,
 }
-
-
-def _parse_layer_type(layer_type: str) -> List[str]:
-    """
-    Normalize the Simple architecture layer type.
-
-    Supported aliases:
-    - XY  -> XXYY
-    - ZX  -> ZZXX
-    - ZY  -> ZZYY
-    - ZXY -> ZZXXYY
-    """
-    lt = layer_type.upper().replace("_", "").replace("-", "")
-
-    aliases = {
-        "XY": "XXYY",
-        "ZX": "ZZXX",
-        "ZY": "ZZYY",
-        "ZXY": "ZZXXYY",
-    }
-    lt = aliases.get(lt, lt)
-
-    mapping = {
-        "ZZXXYY": ["ZZ", "XX", "YY"],
-        "ZZXX": ["ZZ", "XX"],
-        "XXYY": ["XX", "YY"],
-        "ZZYY": ["ZZ", "YY"],
-    }
-
-    if lt not in mapping:
-        raise ValueError(
-            f"Unknown layer_type '{layer_type}'. "
-            "Supported: XY/XXYY, ZX/ZZXX, ZY/ZZYY, ZXY/ZZXXYY."
-        )
-
-    return mapping[lt]
-
-
-def simple_num_params(
-    n_feature_qubits: int,
-    n_layers: int,
-    layer_type: str,
-) -> int:
-    n_terms = len(_parse_layer_type(layer_type))
-    return n_feature_qubits * n_layers * n_terms
 
 
 def _single_qubit_condition():
@@ -93,16 +51,6 @@ def make_depolarizing_noise_model(
     p_single: float,
     p_two: float | None = None,
 ):
-    """
-    Build a PennyLane noise model in the style shown in the notebook:
-    a rule-based model attached externally via qml.add_noise().
-
-    For this reproduction we keep the model deliberately simple:
-    - depolarizing after 1-qubit gates
-    - depolarizing after 2-qubit gates
-
-    If p_two is None, the same probability is used for both cases.
-    """
     if p_two is None:
         p_two = p_single
 
@@ -131,21 +79,15 @@ def make_depolarizing_noise_model(
     )
 
 
-def build_simple_qnn_base(
+def build_simple_qnn_samples(
     n_feature_qubits: int,
     n_layers: int,
     dev,
     layer_type: str = "XXYY",
     interface: str = "torch",
 ):
-    """
-    Base noiseless Simple circuit.
-
-    Noise is attached externally with qml.add_noise(), not written directly
-    into the circuit body.
-    """
     result_wire = n_feature_qubits
-    terms = _parse_layer_type(layer_type)
+    terms = archs._parse_layer_type(layer_type)
 
     @qml.qnode(dev, interface=interface, diff_method="best")
     def qnode(x, params):
@@ -154,10 +96,8 @@ def build_simple_qnn_base(
                 f"Expected input with {n_feature_qubits} encoded features, got {len(x)}."
             )
 
-        for wire in range(n_feature_qubits):
-            qml.RX(x[wire], wires=wire)
+        apply_rx_encoding(x)
 
-        # |-> = X then H on |0>
         qml.PauliX(wires=result_wire)
         qml.Hadamard(wires=result_wire)
 
@@ -166,7 +106,6 @@ def build_simple_qnn_base(
             for term in terms:
                 for feature_wire in range(n_feature_qubits):
                     theta = params[idx]
-
                     if term == "XX":
                         qml.IsingXX(theta, wires=[result_wire, feature_wire])
                     elif term == "YY":
@@ -175,22 +114,14 @@ def build_simple_qnn_base(
                         qml.IsingZZ(theta, wires=[result_wire, feature_wire])
                     else:
                         raise RuntimeError(f"Unexpected term '{term}'.")
-
                     idx += 1
 
-        return qml.expval(qml.PauliX(result_wire))
+        return qml.sample(qml.PauliX(result_wire))
 
     return qnode
 
 
 class NoisySimpleQNNModel(torch.nn.Module):
-    """
-    Torch wrapper for noisy inference with the Simple architecture.
-
-    The circuit itself is defined noiselessly, then transformed with
-    qml.add_noise(noise_model=...).
-    """
-
     def __init__(
         self,
         n_feature_qubits: int,
@@ -199,24 +130,23 @@ class NoisySimpleQNNModel(torch.nn.Module):
         noise_prob_single: float,
         noise_prob_two: float | None = None,
         shots: int = 200,
+        inference_mode: str = "shots",
     ) -> None:
         super().__init__()
+
+        if inference_mode not in {"expval", "shots"}:
+            raise ValueError("inference_mode must be 'expval' or 'shots'.")
 
         self.n_feature_qubits = int(n_feature_qubits)
         self.n_layers = int(n_layers)
         self.layer_type = str(layer_type)
+        self.inference_mode = str(inference_mode)
+        self.shots = int(shots)
 
         dev = qml.device(
             "default.mixed",
             wires=self.n_feature_qubits + 1,
-            shots=shots,
-        )
-
-        base_qnode = build_simple_qnn_base(
-            n_feature_qubits=self.n_feature_qubits,
-            n_layers=self.n_layers,
-            dev=dev,
-            layer_type=self.layer_type,
+            shots=self.shots,
         )
 
         noise_model = make_depolarizing_noise_model(
@@ -228,9 +158,23 @@ class NoisySimpleQNNModel(torch.nn.Module):
             ),
         )
 
-        self.qnode = qml.add_noise(base_qnode, noise_model=noise_model)
+        base_expval_qnode = archs.build_simple_qnn(
+            n_feature_qubits=self.n_feature_qubits,
+            n_layers=self.n_layers,
+            dev=dev,
+            layer_type=self.layer_type,
+        )
+        self.expval_qnode = qml.add_noise(base_expval_qnode, noise_model=noise_model)
 
-        n_params = simple_num_params(
+        base_sample_qnode = build_simple_qnn_samples(
+            n_feature_qubits=self.n_feature_qubits,
+            n_layers=self.n_layers,
+            dev=dev,
+            layer_type=self.layer_type,
+        )
+        self.sample_qnode = qml.add_noise(base_sample_qnode, noise_model=noise_model)
+
+        n_params = archs.simple_num_params(
             self.n_feature_qubits,
             self.n_layers,
             self.layer_type,
@@ -252,10 +196,20 @@ class NoisySimpleQNNModel(torch.nn.Module):
 
         outputs = []
         for x in x_batch:
-            value = self.qnode(x, self.qparams)
-            if not isinstance(value, torch.Tensor):
-                value = torch.tensor(float(value), dtype=torch.float32)
-            outputs.append(value.reshape(()))
+            if self.inference_mode == "expval":
+                value = self.expval_qnode(x, self.qparams)
+                if not isinstance(value, torch.Tensor):
+                    value = torch.tensor(float(value), dtype=torch.float32)
+                outputs.append(value.reshape(()))
+            else:
+                samples = self.sample_qnode(x, self.qparams)
+                if isinstance(samples, torch.Tensor):
+                    samples_np = samples.detach().cpu().numpy().reshape(-1)
+                else:
+                    samples_np = np.asarray(samples, dtype=float).reshape(-1)
+
+                certainty = certainty_from_samples(samples_np)
+                outputs.append(torch.tensor(certainty, dtype=torch.float32).reshape(()))
 
         return torch.stack(outputs, dim=0)
 
@@ -268,22 +222,8 @@ def evaluate_checkpoint_under_noise(
     shots: int = 200,
     batch_size: int = 32,
     two_qubit_scale: float = 1.0,
+    inference_mode: str = "shots",
 ) -> Dict[str, Any]:
-    """
-    Load a trained checkpoint and evaluate it under a selected noise level.
-
-    This implementation supports only the Simple architecture, in line with
-    the paper's noisy-evaluation focus.
-
-    Parameters
-    ----------
-    noise_level:
-        One of PAPER_NOISE_LEVELS keys.
-    two_qubit_scale:
-        Optional multiplier for 2-qubit depolarizing probability.
-        Example: 2.0 means p_two = 2 * p_single.
-        Default 1.0 keeps the model simple and symmetric.
-    """
     if noise_level not in PAPER_NOISE_LEVELS:
         raise ValueError(
             f"Unknown noise_level '{noise_level}'. "
@@ -313,6 +253,7 @@ def evaluate_checkpoint_under_noise(
         noise_prob_single=p_single,
         noise_prob_two=p_two,
         shots=int(shots),
+        inference_mode=inference_mode,
     )
     noisy_model.load_state_dict(state, strict=True)
     noisy_model.eval()
@@ -323,12 +264,13 @@ def evaluate_checkpoint_under_noise(
         y_test,
         batch_size=batch_size,
         device="cpu",
-        desc=f"noise={noise_level}",
+        desc=f"noise={noise_level}|mode={inference_mode}",
     )
 
     stats["noise_prob_single"] = float(p_single)
     stats["noise_prob_two"] = float(p_two)
     stats["shots"] = int(shots)
+    stats["inference_mode"] = inference_mode
     return stats
 
 
@@ -340,11 +282,9 @@ def run_noise_sweep(
     shots: int = 200,
     batch_size: int = 32,
     two_qubit_scale: float = 1.0,
+    inference_mode: str = "shots",
     output_json: str | None = None,
 ) -> Dict[str, Dict[str, float]]:
-    """
-    Evaluate one checkpoint across multiple paper noise levels.
-    """
     if noise_levels is None:
         noise_levels = list(PAPER_NOISE_LEVELS.keys())
 
@@ -354,7 +294,8 @@ def run_noise_sweep(
         print(
             f"\n[noise_eval] Level: {lvl} "
             f"(p1={PAPER_NOISE_LEVELS[lvl]:.4f}, "
-            f"p2={min(1.0, PAPER_NOISE_LEVELS[lvl] * two_qubit_scale):.4f})"
+            f"p2={min(1.0, PAPER_NOISE_LEVELS[lvl] * two_qubit_scale):.4f}, "
+            f"mode={inference_mode})"
         )
 
         stats = evaluate_checkpoint_under_noise(
@@ -365,6 +306,7 @@ def run_noise_sweep(
             shots=shots,
             batch_size=batch_size,
             two_qubit_scale=two_qubit_scale,
+            inference_mode=inference_mode,
         )
 
         summary = {
@@ -405,6 +347,7 @@ if __name__ == "__main__":
     parser.add_argument("--shots", type=int, default=200)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--two_qubit_scale", type=float, default=1.0)
+    parser.add_argument("--mode", choices=["expval", "shots"], default="shots")
     parser.add_argument("--output", default="results/noise_sweep.json")
     parser.add_argument(
         "--levels",
@@ -427,5 +370,6 @@ if __name__ == "__main__":
         shots=args.shots,
         batch_size=args.batch_size,
         two_qubit_scale=args.two_qubit_scale,
+        inference_mode=args.mode,
         output_json=args.output,
     )

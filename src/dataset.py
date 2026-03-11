@@ -1,9 +1,7 @@
 from __future__ import annotations
-
 from typing import Optional
 import os
 import warnings
-
 import pandas as pd
 from sklearn.utils import resample
 
@@ -32,7 +30,7 @@ def build_processed_nf_unsw(
     processed DataFrame.
 
     This function does NOT perform any train/test split.
-    Splitting is delegated to data_utils.py to avoid duplication and leakage.
+    Splitting is delegated to data_utils.py.
 
     Parameters
     ----------
@@ -72,6 +70,7 @@ def build_processed_nf_unsw(
     for col in FEATURE_COLUMNS:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
+    # Non-numeric labels become NaN and will be dropped below.
     df[LABEL_COLUMN] = pd.to_numeric(df[LABEL_COLUMN], errors="coerce")
 
     n_before = len(df)
@@ -125,12 +124,6 @@ def build_processed_nf_unsw(
     )
 
     print(f"[dataset] After balancing: {len(balanced_df):,} rows.")
-
-    if len(malicious_df) == 72406 and len(balanced_df) != 144812:
-        warnings.warn(
-            "Expected 144,812 rows after balancing when malicious samples are 72,406, "
-            f"but found {len(balanced_df):,}."
-        )
 
     if save_processed_csv is not None:
         out_dir = os.path.dirname(save_processed_csv)

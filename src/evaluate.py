@@ -29,8 +29,8 @@ def evaluate_model(
     device: str = "cpu",
     desc: str = "eval",
     threshold: float = 0.0,
-    positive_class_label: int = 0,
-    negative_class_label: int = 1,
+    benign_label: int = 0,
+    malicious_label: int = 1,
 ) -> Dict[str, Any]:
     """
     Run inference on a dataset and return standard classification metrics.
@@ -41,14 +41,20 @@ def evaluate_model(
     final expectation value of the measured observable, which is also the
     certainty factor C in [-1, 1].
 
-    Default decision rule
-    ---------------------
-    - C >= threshold -> positive_class_label
-    - C <  threshold -> negative_class_label
+    Decision rule
+    -------------
+    - C >= threshold -> benign_label
+    - C <  threshold -> malicious_label
 
-    With the current project convention:
-    - positive_class_label = 0  -> benign
-    - negative_class_label = 1  -> malicious
+    Current project convention
+    --------------------------
+    - benign_label = 0
+    - malicious_label = 1
+
+    Metric convention
+    -----------------
+    Precision, recall, and F1 are computed with malicious_label as the
+    positive class, which is the most natural choice for intrusion detection.
 
     Returns
     -------
@@ -95,25 +101,25 @@ def evaluate_model(
 
     preds = predict_many_from_certainty(
         Cs,
-        positive_class_label=positive_class_label,
-        negative_class_label=negative_class_label,
         threshold=threshold,
+        benign_label=benign_label,
+        malicious_label=malicious_label,
     )
     confs = confidences_from_certainties(Cs)
 
-    f1 = f1_score(ys, preds, zero_division=0)
+    f1 = f1_score(ys, preds, pos_label=malicious_label, zero_division=0)
     acc = accuracy_score(ys, preds)
-    prec = precision_score(ys, preds, zero_division=0)
-    rec = recall_score(ys, preds, zero_division=0)
+    prec = precision_score(ys, preds, pos_label=malicious_label, zero_division=0)
+    rec = recall_score(ys, preds, pos_label=malicious_label, zero_division=0)
 
     try:
-        # Build a score for class 1 (malicious) so roc_auc_score is consistent.
+        # Build a score for the malicious class so roc_auc_score is consistent.
         #
         # Under the default rule:
-        #   C >= 0 -> class 0 (benign)
-        #   C <  0 -> class 1 (malicious)
+        #   C >= 0 -> benign
+        #   C <  0 -> malicious
         #
-        # So larger maliciousness should correspond to smaller C.
+        # Therefore, larger maliciousness should correspond to smaller C.
         malicious_score = (-Cs + 1.0) / 2.0
         roc = roc_auc_score(ys, malicious_score)
     except Exception:

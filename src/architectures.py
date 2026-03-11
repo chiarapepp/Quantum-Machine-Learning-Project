@@ -1,8 +1,7 @@
 from __future__ import annotations
 from typing import Callable, List
 import pennylane as qml
-
-from src.encoding import apply_rx_encoding
+from encoding import apply_rx_encoding
 
 
 def _rot_rot_cnot(params, wires: List[int]) -> None:
@@ -83,20 +82,22 @@ def ttn_num_params(n_qubits: int) -> int:
     return 6 * blocks
 
 
-def mera_num_params(n_qubits: int, n_scales: int) -> int:
+def mera_num_params(n_qubits: int) -> int:
     """
-    Number of trainable parameters for the MERA architecture.
+    Number of trainable parameters for the fixed MERA architecture.
 
     Each disentangler and isometry block has 6 parameters.
+    The hierarchy is determined automatically by n_qubits.
     """
+    if n_qubits < 2:
+        raise ValueError("MERA requires at least 2 qubits.")
+
     active = list(range(n_qubits))
     blocks = 0
 
-    for _ in range(n_scales):
-        if len(active) < 2:
-            break
-        blocks += max(0, (len(active) - 1) // 2)
-        blocks += len(active) // 2
+    while len(active) > 1:
+        blocks += max(0, (len(active) - 1) // 2)  # disentanglers
+        blocks += len(active) // 2                # isometries
         active = active[::2]
 
     return 6 * blocks
@@ -212,23 +213,24 @@ def build_ttn_qnn(
 
     return qnode
 
-
 def build_mera_qnn(
     n_qubits: int,
-    n_scales: int,
     dev,
     interface: str = "torch",
 ) -> Callable:
     """
-    Build a MERA-style circuit.
+    Build a MERA-style circuit for a fixed input size.
 
-    Each scale applies:
-    - disentanglers on shifted neighbours
-    - isometries on even pairs
-    - coarse graining by keeping every other qubit
+    At each hierarchical scale:
+    - apply disentanglers on shifted neighbouring pairs
+    - apply isometries on even pairs
+    - coarse grain by keeping every other qubit
 
-    Final readout is <Z>.
+    Final readout is <Z> on the last surviving qubit.
     """
+    if n_qubits < 2:
+        raise ValueError("MERA requires at least 2 qubits.")
+
     @qml.qnode(dev, interface=interface, diff_method="best")
     def qnode(x, params):
         apply_rx_encoding(x)
@@ -236,10 +238,7 @@ def build_mera_qnn(
         idx = 0
         active = list(range(n_qubits))
 
-        for _ in range(n_scales):
-            if len(active) < 2:
-                break
-
+        while len(active) > 1:
             # Disentanglers: shifted pairs (1,2), (3,4), ...
             for i in range(1, len(active) - 1, 2):
                 _rot_rot_cnot(params[idx: idx + 6], [active[i], active[i + 1]])
@@ -250,12 +249,12 @@ def build_mera_qnn(
                 _rot_rot_cnot(params[idx: idx + 6], [active[i], active[i + 1]])
                 idx += 6
 
+            # Coarse graining: keep every other qubit
             active = active[::2]
 
         return qml.expval(qml.PauliZ(active[0]))
 
     return qnode
-
 
 def build_qcnn_qnn(
     n_qubits: int,

@@ -21,7 +21,7 @@ import noise_eval as noise_module
 PAPER_BATCH_SIZES = [16, 32]
 PAPER_LRS = [0.1, 0.05, 0.02, 0.015, 0.01, 0.005, 0.001]
 PAPER_OPTIMIZERS = ["adam", "sgd"]
-PAPER_MOMENTA = [0.0, 0.2, 0.3]          # only for SGD
+PAPER_MOMENTA = [0.0, 0.2, 0.3]   # only for SGD
 PAPER_LR_DECAYS = [0.0, 0.001, 0.01]
 PAPER_ARCHS = ["ttn", "mera", "qcnn", "simple"]
 
@@ -51,16 +51,6 @@ def _save_json(path: str, obj) -> None:
 def iter_paper_trials() -> List[Dict[str, Any]]:
     """
     Build the paper-style hyperparameter grid.
-
-    Paper search:
-    - batch sizes: 16, 32
-    - learning rates: 0.1, 0.05, 0.02, 0.015, 0.01, 0.005, 0.001
-    - optimizers: Adam, SGD
-    - momentum: 0, 0.2, 0.3
-    - decay: 0, 0.001, 0.01
-    - architectures: TTN, MERA, QCNN, Simple
-    - for Simple only: layers {1,2,4,6} and entanglement sets
-      {ZZXXYY, ZZXX, XXYY, ZZYY}
     """
     trials: List[Dict[str, Any]] = []
 
@@ -101,24 +91,15 @@ def make_run_name(trial: Dict[str, Any]) -> str:
     """
     Deterministic run name for resume support.
     """
-    arch = trial["arch"]
-    n_layers = trial["n_layers"]
-    layer_type = trial["layer_type"]
-    batch_size = trial["batch_size"]
-    lr = trial["lr"]
-    optimizer = trial["optimizer"]
-    momentum = trial["momentum"]
-    lr_decay = trial["lr_decay"]
-
     return (
-        f"{arch}"
-        f"_L{n_layers}"
-        f"_T{layer_type}"
-        f"_BS{batch_size}"
-        f"_LR{lr}"
-        f"_OPT{optimizer}"
-        f"_M{momentum}"
-        f"_D{lr_decay}"
+        f"{trial['arch']}"
+        f"_L{trial['n_layers']}"
+        f"_T{trial['layer_type']}"
+        f"_BS{trial['batch_size']}"
+        f"_LR{trial['lr']}"
+        f"_OPT{trial['optimizer']}"
+        f"_M{trial['momentum']}"
+        f"_D{trial['lr_decay']}"
     )
 
 
@@ -146,19 +127,24 @@ def best_per_arch(results: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_csv", default=train_module.DEFAULT_CFG["data_csv"])
-    parser.add_argument("--raw_csv", default=train_module.DEFAULT_CFG["raw_csv"])
+
+    parser.add_argument("--data_csv", default="data/processed/nf_unsw_balanced.csv")
+    parser.add_argument("--raw_csv", default="data/raw/NF-UNSW-NB15-v2.csv")
     parser.add_argument("--output_dir", default="results")
-    parser.add_argument("--epochs", type=int, default=train_module.DEFAULT_CFG["epochs"])
-    parser.add_argument("--n_bins", type=int, default=train_module.DEFAULT_CFG["n_bins"])
-    parser.add_argument("--n_feature_qubits", type=int, default=train_module.DEFAULT_CFG["n_feature_qubits"])
-    parser.add_argument("--split_random_state", type=int, default=train_module.DEFAULT_CFG["split_random_state"])
-    parser.add_argument("--test_size", type=float, default=train_module.DEFAULT_CFG["test_size"])
+
+    parser.add_argument("--epochs", type=int, default=30)
+    parser.add_argument("--n_bins", type=int, default=100)
+    parser.add_argument("--n_feature_qubits", type=int, default=8)
+    parser.add_argument("--split_random_state", type=int, default=1)
+    parser.add_argument("--test_size", type=float, default=0.15)
+
     parser.add_argument("--use_cuda", action="store_true")
     parser.add_argument("--use_wandb", action="store_true")
+
     parser.add_argument("--run_noise", action="store_true")
     parser.add_argument("--noise_shots", type=int, default=200)
     parser.add_argument("--noise_batch_size", type=int, default=32)
+
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -211,32 +197,34 @@ def main() -> None:
         if run_name in done:
             continue
 
-        cfg = train_module.DEFAULT_CFG.copy()
-        cfg.update(
-            {
-                "arch": trial["arch"],
-                "n_feature_qubits": args.n_feature_qubits,
-                "n_layers": trial["n_layers"],
-                "layer_type": trial["layer_type"],
-                "batch_size": trial["batch_size"],
-                "lr": trial["lr"],
-                "optimizer": trial["optimizer"],
-                "momentum": trial["momentum"],
-                "lr_decay": trial["lr_decay"],
-                "epochs": args.epochs,
-                "n_bins": args.n_bins,
-                "test_size": args.test_size,
-                "split_random_state": args.split_random_state,
-                "data_csv": args.data_csv,
-                "raw_csv": args.raw_csv,
-                "output_dir": os.path.join(args.output_dir, "checkpoints"),
-                "use_cuda": args.use_cuda,
-                "use_wandb": args.use_wandb,
-                "run_name": run_name,
-            }
-        )
+        cfg = {
+            "data_csv": args.data_csv,
+            "raw_csv": args.raw_csv,
+            "n_bins": args.n_bins,
+            "test_size": args.test_size,
+            "split_random_state": args.split_random_state,
 
-        result = train_module.run_trial(
+            "arch": trial["arch"],
+            "n_feature_qubits": args.n_feature_qubits,
+            "n_layers": trial["n_layers"],
+            "layer_type": trial["layer_type"],
+
+            "optimizer": trial["optimizer"],
+            "lr": trial["lr"],
+            "momentum": trial["momentum"],
+            "lr_decay": trial["lr_decay"],
+            "batch_size": trial["batch_size"],
+            "hinge_margin": 1.0,
+            "epochs": args.epochs,
+
+            "output_dir": os.path.join(args.output_dir, "checkpoints"),
+            "run_name": run_name,
+            "use_cuda": args.use_cuda,
+            "use_wandb": args.use_wandb,
+            "wandb_project": "naduqnn_repro",
+        }
+
+        result = train_module.train(
             X_train=X_train,
             y_train=y_train,
             X_val=X_test,

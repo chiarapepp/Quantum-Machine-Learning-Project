@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 from typing import Optional
 import torch
 import torch.nn as nn
@@ -53,10 +52,9 @@ class QNNModel(nn.Module):
         elif arch == "mera":
             self.qnode = archs.build_mera_qnn(
                 n_qubits=n_feature_qubits,
-                n_scales=n_layers,
                 dev=dev,
             )
-            n_params = archs.mera_num_params(n_feature_qubits, n_layers)
+            n_params = archs.mera_num_params(n_feature_qubits)
 
         elif arch == "qcnn":
             self.qnode = archs.build_qcnn_qnn(

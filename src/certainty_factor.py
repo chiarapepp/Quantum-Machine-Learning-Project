@@ -30,11 +30,11 @@ def measurement_basis_for_architecture(architecture: str) -> MeasurementBasis:
 
 def certainty_from_expval(expval: float) -> float:
     """
-    Convert a model expectation value into a certainty factor in [-1, 1].
+    Convert an expectation value into a certainty factor in [-1, 1].
 
-    In this project the QNN output is already an expectation value of a Pauli
-    observable, so the certainty factor is simply that value, clipped for
-    numerical safety.
+    In noiseless simulation, the QNN output is already an expectation value
+    of the measured Pauli observable, so the certainty factor is simply that
+    value, clipped for numerical safety.
     """
     return float(np.clip(expval, -1.0, 1.0))
 
@@ -42,6 +42,9 @@ def certainty_from_expval(expval: float) -> float:
 def certainty_from_samples(samples: Iterable[float]) -> float:
     """
     Estimate the certainty factor from shot-based Pauli outcomes in {-1, +1}.
+
+    This is useful for noisy simulation and hardware-style inference, where
+    the prediction is based on repeated measurements.
     """
     arr = np.asarray(list(samples), dtype=float)
 
@@ -80,7 +83,7 @@ def predict_many_from_certainty(
     """
     Vectorized prediction from certainty factors.
     """
-    arr = np.asarray(list(certainties), dtype=float)
+    arr = np.asarray(certainties, dtype=float)
 
     return np.where(
         arr >= threshold,
@@ -103,5 +106,4 @@ def confidences_from_certainties(certainties: Iterable[float]) -> np.ndarray:
     """
     Vectorized confidence computation.
     """
-    arr = np.asarray(list(certainties), dtype=float)
-    return np.abs(arr)
+    return np.abs(np.asarray(certainties, dtype=float))

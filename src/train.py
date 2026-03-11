@@ -1,20 +1,15 @@
 """
 Training loop for QNN intrusion detection.
 
-This module:
 - ensures the balanced processed CSV exists
 - loads encoded train/test splits from data_utils.py
 - trains one QNN model with hinge loss
 - evaluates after each epoch
 - saves the best checkpoint by validation/test F1
 
-Paper-aligned defaults
-----------------------
-- best reported model: Simple architecture
-- 8 feature qubits
-- 6 layers
-- XY interaction pattern (implemented here as "XXYY")
-- SGD, lr=0.02, decay=0.001, batch_size=32
+Usage
+-----
+python train.py --config configs/simple_paper.json
 """
 
 from __future__ import annotations
@@ -53,45 +48,18 @@ def hinge_loss(
     Hinge loss with ±1 targets.
 
     Label convention:
-    - malicious (1) -> target +1
-    - benign    (0) -> target -1
+    - benign    (0) -> target +1
+    - malicious (1) -> target -1
 
-    loss = mean(max(0, margin - certainty * target))
+    This matches the project decision rule:
+    - certainty >= 0 -> benign
+    - certainty <  0 -> malicious
     """
-    target = torch.where(
-        y_binary == 1,
-        torch.ones_like(certainty),
-        -torch.ones_like(certainty),
-    )
+    target = 1.0 - 2.0 * y_binary.float()
     return torch.clamp(margin - certainty * target, min=0.0).mean()
 
 
-def _build_optimizer(
-    model: torch.nn.Module,
-    cfg: Dict[str, Any],
-) -> torch.optim.Optimizer:
-    """
-    Build optimizer from config.
-    """
-    opt_name = str(cfg.get("optimizer", "sgd")).lower()
-
-    if opt_name == "sgd":
-        return optim.SGD(
-            model.parameters(),
-            lr=float(cfg["lr"]),
-            momentum=float(cfg.get("momentum", 0.0)),
-        )
-
-    if opt_name == "adam":
-        return optim.Adam(
-            model.parameters(),
-            lr=float(cfg["lr"]),
-        )
-
-    raise ValueError(f"Unknown optimizer '{opt_name}'.")
-
-
-def _save_checkpoint(
+def save_checkpoint(
     path: str,
     model: torch.nn.Module,
     cfg: Dict[str, Any],
@@ -108,14 +76,15 @@ def _save_checkpoint(
         "config": dict(cfg),
         "model_state": model.state_dict(),
         "metrics": {
-            k: float(v) for k, v in metrics.items()
+            k: float(v)
+            for k, v in metrics.items()
             if isinstance(v, (int, float, np.floating))
         },
     }
     torch.save(payload, path)
 
 
-def run_trial(
+def train(
     X_train: np.ndarray,
     y_train: np.ndarray,
     X_val: np.ndarray,
@@ -124,27 +93,13 @@ def run_trial(
 ) -> Dict[str, Any]:
     """
     Train one QNN configuration and return best validation metrics.
-
-    Parameters
-    ----------
-    X_train, y_train:
-        Encoded training split.
-    X_val, y_val:
-        Encoded validation/test split used for model selection.
-        For now this is the 15% split returned by data_utils.py.
-    cfg:
-        Training configuration dictionary.
-
-    Returns
-    -------
-    dict
-        Summary with best epoch, checkpoint path, and best metrics.
     """
     run_name = str(cfg.get("run_name", "trial"))
     use_cuda = bool(cfg.get("use_cuda", False))
     device_str = "cuda" if (torch.cuda.is_available() and use_cuda) else "cpu"
 
-    if _WANDB and bool(cfg.get("use_wandb", False)):
+    use_wandb = _WANDB and bool(cfg.get("use_wandb", False))
+    if use_wandb:
         wandb.init(
             project=cfg.get("wandb_project", "naduqnn_repro"),
             name=run_name,
@@ -166,18 +121,32 @@ def run_trial(
         layer_type=str(cfg.get("layer_type", "XXYY")),
     ).to(device_str)
 
-    optimizer = _build_optimizer(qnn, cfg)
+    opt_name = str(cfg.get("optimizer", "sgd")).lower()
+    if opt_name == "sgd":
+        optimizer = optim.SGD(
+            qnn.parameters(),
+            lr=float(cfg["lr"]),
+            momentum=float(cfg.get("momentum", 0.0)),
+        )
+    elif opt_name == "adam":
+        optimizer = optim.Adam(
+            qnn.parameters(),
+            lr=float(cfg["lr"]),
+        )
+    else:
+        raise ValueError(f"Unknown optimizer '{opt_name}'.")
 
     lr_decay = float(cfg.get("lr_decay", 0.0))
-    gamma = max(0.0, 1.0 - lr_decay)
-    scheduler = ExponentialLR(optimizer, gamma=gamma)
-
-    train_ds = TensorDataset(
-        torch.tensor(X_train, dtype=torch.float32),
-        torch.tensor(y_train, dtype=torch.long),
+    scheduler = ExponentialLR(
+        optimizer,
+        gamma=max(0.0, 1.0 - lr_decay),
     )
+
     train_loader = DataLoader(
-        train_ds,
+        TensorDataset(
+            torch.tensor(X_train, dtype=torch.float32),
+            torch.tensor(y_train, dtype=torch.long),
+        ),
         batch_size=int(cfg["batch_size"]),
         shuffle=True,
     )
@@ -191,7 +160,6 @@ def run_trial(
     best_epoch = -1
     best_ckpt = None
     best_metrics: Dict[str, Any] = {}
-
     history: list[Dict[str, float]] = []
 
     for epoch in range(epochs):
@@ -258,23 +226,22 @@ def run_trial(
             f"lr={optimizer.param_groups[0]['lr']:.6f}"
         )
 
-        if _WANDB and bool(cfg.get("use_wandb", False)):
+        if use_wandb:
             wandb.log(epoch_summary)
 
         if float(val_stats["f1"]) > best_val_f1:
             best_val_f1 = float(val_stats["f1"])
-            best_epoch = epoch
+            best_epoch = epoch + 1
             best_metrics = val_stats
 
-            ckpt_path = os.path.join(output_dir, f"{run_name}.pt")
-            _save_checkpoint(
-                ckpt_path,
+            best_ckpt = os.path.join(output_dir, f"{run_name}.pt")
+            save_checkpoint(
+                best_ckpt,
                 model=qnn,
                 cfg=cfg,
-                epoch=epoch + 1,
+                epoch=best_epoch,
                 metrics=val_stats,
             )
-            best_ckpt = ckpt_path
 
     history_path = os.path.join(output_dir, f"{run_name}_history.json")
     with open(history_path, "w", encoding="utf-8") as f:
@@ -282,7 +249,7 @@ def run_trial(
 
     result = {
         "best_val_f1": float(best_val_f1),
-        "best_epoch": int(best_epoch + 1),
+        "best_epoch": int(best_epoch),
         "best_ckpt": best_ckpt,
         "history_json": history_path,
         "best_accuracy": float(best_metrics.get("accuracy", float("nan"))),
@@ -293,8 +260,8 @@ def run_trial(
         "best_cert_std": float(best_metrics.get("cert_std", float("nan"))),
     }
 
-    if _WANDB and bool(cfg.get("use_wandb", False)):
-        wandb.log({"best_val_f1": best_val_f1, "best_epoch": best_epoch + 1})
+    if use_wandb:
+        wandb.log({"best_val_f1": best_val_f1, "best_epoch": best_epoch})
         wandb.finish()
 
     print(
@@ -303,72 +270,54 @@ def run_trial(
         f"best_epoch={result['best_epoch']} | "
         f"ckpt={result['best_ckpt']}"
     )
+
     return result
 
 
-DEFAULT_CFG: Dict[str, Any] = {
-    # data
-    "data_csv": "data/processed/nf_unsw_balanced.csv",
-    "raw_csv": "data/raw/NF-UNSW-NB15-v2.csv",
-    "n_bins": 100,
-    "test_size": 0.15,
-    "split_random_state": 1,
+def load_config(path: str) -> Dict[str, Any]:
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Config file not found: {path}")
 
-    # model
-    "arch": "simple",
-    "n_feature_qubits": 8,
-    "n_layers": 6,
-    "layer_type": "XXYY",
+    with open(path, "r", encoding="utf-8") as f:
+        cfg = json.load(f)
 
-    # optimization
-    "optimizer": "sgd",
-    "lr": 0.02,
-    "momentum": 0.0,
-    "lr_decay": 0.001,
-    "batch_size": 32,
-    "hinge_margin": 1.0,
-    "epochs": 30,
+    required_keys = [
+        "data_csv",
+        "raw_csv",
+        "n_bins",
+        "test_size",
+        "split_random_state",
+        "arch",
+        "n_feature_qubits",
+        "n_layers",
+        "layer_type",
+        "optimizer",
+        "lr",
+        "momentum",
+        "lr_decay",
+        "batch_size",
+        "hinge_margin",
+        "epochs",
+        "output_dir",
+        "use_cuda",
+        "use_wandb",
+    ]
+    missing = [k for k in required_keys if k not in cfg]
+    if missing:
+        raise ValueError(f"Config file is missing required keys: {missing}")
 
-    # misc
-    "output_dir": "results/checkpoints",
-    "use_cuda": False,
-    "use_wandb": False,
-    "wandb_project": "naduqnn_repro",
-}
+    if "run_name" not in cfg:
+        cfg["run_name"] = os.path.splitext(os.path.basename(path))[0]
+
+    return cfg
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-
-    parser.add_argument("--arch", default=DEFAULT_CFG["arch"])
-    parser.add_argument("--n_feature_qubits", type=int, default=DEFAULT_CFG["n_feature_qubits"])
-    parser.add_argument("--n_layers", type=int, default=DEFAULT_CFG["n_layers"])
-    parser.add_argument("--layer_type", default=DEFAULT_CFG["layer_type"])
-
-    parser.add_argument("--optimizer", default=DEFAULT_CFG["optimizer"])
-    parser.add_argument("--lr", type=float, default=DEFAULT_CFG["lr"])
-    parser.add_argument("--momentum", type=float, default=DEFAULT_CFG["momentum"])
-    parser.add_argument("--lr_decay", type=float, default=DEFAULT_CFG["lr_decay"])
-    parser.add_argument("--batch_size", type=int, default=DEFAULT_CFG["batch_size"])
-    parser.add_argument("--epochs", type=int, default=DEFAULT_CFG["epochs"])
-    parser.add_argument("--hinge_margin", type=float, default=DEFAULT_CFG["hinge_margin"])
-
-    parser.add_argument("--n_bins", type=int, default=DEFAULT_CFG["n_bins"])
-    parser.add_argument("--test_size", type=float, default=DEFAULT_CFG["test_size"])
-    parser.add_argument("--split_random_state", type=int, default=DEFAULT_CFG["split_random_state"])
-
-    parser.add_argument("--data_csv", default=DEFAULT_CFG["data_csv"])
-    parser.add_argument("--raw_csv", default=DEFAULT_CFG["raw_csv"])
-    parser.add_argument("--output_dir", default=DEFAULT_CFG["output_dir"])
-    parser.add_argument("--run_name", default="paper_best")
-
-    parser.add_argument("--use_cuda", action="store_true")
-    parser.add_argument("--use_wandb", action="store_true")
-
+    parser.add_argument("--config", required=True, help="Path to a JSON config file.")
     args = parser.parse_args()
 
-    cfg = DEFAULT_CFG.copy()
-    cfg.update(vars(args))
+    cfg = load_config(args.config)
 
     if not os.path.exists(cfg["data_csv"]):
         print("[train] processed CSV not found, generating it from raw CSV...")
@@ -379,27 +328,22 @@ if __name__ == "__main__":
         )
 
     pack = data_utils.load_encoded_splits(
-        processed_csv=cfg["data_csv"],
+        processed_csv=str(cfg["data_csv"]),
         test_size=float(cfg["test_size"]),
         random_state=int(cfg["split_random_state"]),
         n_bins=int(cfg["n_bins"]),
     )
 
-    X_train = pack["X_train"]
-    y_train = pack["y_train"]
-    X_test = pack["X_test"]
-    y_test = pack["y_test"]
-
     print(
         f"[train] encoded data loaded | "
-        f"train={X_train.shape}, test={X_test.shape}"
+        f"train={pack['X_train'].shape}, test={pack['X_test'].shape}"
     )
 
-    result = run_trial(
-        X_train=X_train,
-        y_train=y_train,
-        X_val=X_test,
-        y_val=y_test,
+    result = train(
+        X_train=pack["X_train"],
+        y_train=pack["y_train"],
+        X_val=pack["X_test"],
+        y_val=pack["y_test"],
         cfg=cfg,
     )
 
