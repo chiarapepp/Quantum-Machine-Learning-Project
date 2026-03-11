@@ -1,87 +1,162 @@
-"""
-Training loop for QNN intrusion detection.
-
-- ensures the balanced processed CSV exists
-- loads encoded train/test splits from data_utils.py
-- trains one QNN model with hinge loss
-- evaluates after each epoch
-- saves the best checkpoint by validation/test F1
-
-Usage
------
-python train.py --config configs/simple_paper.json
-"""
-
 from __future__ import annotations
 
 import os
 import json
 import time
 import argparse
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 import numpy as np
-import torch
-import torch.optim as optim
-from torch.optim.lr_scheduler import ExponentialLR
-from torch.utils.data import DataLoader, TensorDataset
-from tqdm import tqdm
+import pennylane as qml
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_auc_score
 
-try:
-    import wandb
-    _WANDB = True
-except ImportError:
-    _WANDB = False
-
-import model as model_module
-import evaluate as eval_module
+import architectures as archs
 import data_utils
 import dataset as ds_module
+from certainty_factor import (
+    certainty_from_expval,
+    predict_many_from_certainty,
+    confidences_from_certainties,
+)
 
 
-def hinge_loss(
-    certainty: torch.Tensor,
-    y_binary: torch.Tensor,
-    margin: float = 1.0,
-) -> torch.Tensor:
+def hinge_loss_from_outputs(outputs: np.ndarray, y: np.ndarray, margin: float = 1.0) -> float:
     """
-    Hinge loss with ±1 targets.
-
-    Label convention:
-    - benign    (0) -> target +1
-    - malicious (1) -> target -1
-
-    This matches the project decision rule:
-    - certainty >= 0 -> benign
-    - certainty <  0 -> malicious
+    Hinge loss with labels mapped as:
+    benign (0)    -> +1
+    malicious (1) -> -1
     """
-    target = 1.0 - 2.0 * y_binary.float()
-    return torch.clamp(margin - certainty * target, min=0.0).mean()
+    y_signed = 1.0 - 2.0 * y.astype(float)
+    losses = np.maximum(0.0, margin - outputs * y_signed)
+    return float(np.mean(losses))
 
 
-def save_checkpoint(
-    path: str,
-    model: torch.nn.Module,
-    cfg: Dict[str, Any],
-    epoch: int,
-    metrics: Dict[str, Any],
-) -> None:
+def build_qnode(
+    arch: str,
+    n_feature_qubits: int,
+    n_layers: int,
+    layer_type: str,
+    shots: int | None = None,
+    noisy: bool = False,
+):
+    n_wires = n_feature_qubits + (1 if arch == "simple" else 0)
+    backend = "default.mixed" if noisy else "default.qubit"
+    dev = qml.device(backend, wires=n_wires, shots=shots)
+
+    arch = arch.lower()
+
+    if arch == "simple":
+        qnode = archs.build_simple_qnn(
+            n_feature_qubits=n_feature_qubits,
+            n_layers=n_layers,
+            dev=dev,
+            layer_type=layer_type,
+            interface="autograd",
+        )
+        n_params = archs.simple_num_params(n_feature_qubits, n_layers, layer_type)
+
+    elif arch == "ttn":
+        qnode = archs.build_ttn_qnn(
+            n_qubits=n_feature_qubits,
+            dev=dev,
+            interface="autograd",
+        )
+        n_params = archs.ttn_num_params(n_feature_qubits)
+
+    elif arch == "mera":
+        qnode = archs.build_mera_qnn(
+            n_qubits=n_feature_qubits,
+            dev=dev,
+            interface="autograd",
+        )
+        n_params = archs.mera_num_params(n_feature_qubits)
+
+    elif arch == "qcnn":
+        qnode = archs.build_qcnn_qnn(
+            n_qubits=n_feature_qubits,
+            dev=dev,
+            interface="autograd",
+        )
+        n_params = archs.qcnn_num_params(n_feature_qubits)
+
+    else:
+        raise ValueError(f"Unknown architecture '{arch}'.")
+
+    return qnode, n_params
+
+
+def predict_outputs(
+    qnode,
+    X: np.ndarray,
+    params: np.ndarray,
+) -> np.ndarray:
     """
-    Save checkpoint in a format that noise_eval.py can later reload.
+    Run the QNN on all samples and return raw expectation values.
     """
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    outputs = [qnode(x, params) for x in X]
+    return np.asarray(outputs, dtype=float)
 
-    payload = {
-        "epoch": int(epoch),
-        "config": dict(cfg),
-        "model_state": model.state_dict(),
-        "metrics": {
-            k: float(v)
-            for k, v in metrics.items()
-            if isinstance(v, (int, float, np.floating))
-        },
+
+def evaluate_qnode(
+    qnode,
+    X: np.ndarray,
+    y: np.ndarray,
+    params: np.ndarray,
+    threshold: float = 0.0,
+    benign_label: int = 0,
+    malicious_label: int = 1,
+) -> Dict[str, Any]:
+    outputs = predict_outputs(qnode, X, params)
+    certainties = np.array([certainty_from_expval(v) for v in outputs], dtype=float)
+
+    preds = predict_many_from_certainty(
+        certainties,
+        threshold=threshold,
+        benign_label=benign_label,
+        malicious_label=malicious_label,
+    )
+    confs = confidences_from_certainties(certainties)
+
+    f1 = f1_score(y, preds, pos_label=malicious_label, zero_division=0)
+    acc = accuracy_score(y, preds)
+    prec = precision_score(y, preds, pos_label=malicious_label, zero_division=0)
+    rec = recall_score(y, preds, pos_label=malicious_label, zero_division=0)
+
+    try:
+        malicious_score = (-certainties + 1.0) / 2.0
+        roc = roc_auc_score(y, malicious_score)
+    except Exception:
+        roc = float("nan")
+
+    return {
+        "f1": float(f1),
+        "accuracy": float(acc),
+        "precision": float(prec),
+        "recall": float(rec),
+        "roc_auc": float(roc),
+        "cert_mean": float(np.mean(certainties)),
+        "cert_std": float(np.std(certainties)),
+        "conf_mean": float(np.mean(confs)),
+        "conf_std": float(np.std(confs)),
+        "Cs": certainties,
+        "confidence": confs,
+        "y": np.asarray(y, dtype=int),
+        "preds": preds,
     }
-    torch.save(payload, path)
+
+
+def make_minibatches(
+    X: np.ndarray,
+    y: np.ndarray,
+    batch_size: int,
+    rng: np.random.Generator,
+):
+    idx = np.arange(len(X))
+    rng.shuffle(idx)
+
+    for start in range(0, len(X), batch_size):
+        batch_idx = idx[start:start + batch_size]
+        yield X[batch_idx], y[batch_idx]
 
 
 def train(
@@ -91,117 +166,78 @@ def train(
     y_val: np.ndarray,
     cfg: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """
-    Train one QNN configuration and return best validation metrics.
-    """
     run_name = str(cfg.get("run_name", "trial"))
-    use_cuda = bool(cfg.get("use_cuda", False))
-    device_str = "cuda" if (torch.cuda.is_available() and use_cuda) else "cpu"
 
-    use_wandb = _WANDB and bool(cfg.get("use_wandb", False))
-    if use_wandb:
-        wandb.init(
-            project=cfg.get("wandb_project", "naduqnn_repro"),
-            name=run_name,
-            config=cfg,
-        )
-
-    dev = model_module.make_device(
-        n_feature_qubits=int(cfg["n_feature_qubits"]),
+    qnode, n_params = build_qnode(
         arch=str(cfg["arch"]),
+        n_feature_qubits=int(cfg["n_feature_qubits"]),
+        n_layers=int(cfg["n_layers"]),
+        layer_type=str(cfg.get("layer_type", "XXYY")),
         shots=None,
         noisy=False,
     )
 
-    qnn = model_module.QNNModel(
-        arch=str(cfg["arch"]),
-        n_feature_qubits=int(cfg["n_feature_qubits"]),
-        n_layers=int(cfg["n_layers"]),
-        dev=dev,
-        layer_type=str(cfg.get("layer_type", "XXYY")),
-    ).to(device_str)
+    rng = np.random.default_rng(int(cfg.get("seed", 1234)))
+    params = qml.numpy.array(
+        rng.uniform(0.0, 2.0 * np.pi, size=n_params),
+        requires_grad=True,
+    )
 
-    opt_name = str(cfg.get("optimizer", "sgd")).lower()
-    if opt_name == "sgd":
-        optimizer = optim.SGD(
-            qnn.parameters(),
-            lr=float(cfg["lr"]),
-            momentum=float(cfg.get("momentum", 0.0)),
-        )
-    elif opt_name == "adam":
-        optimizer = optim.Adam(
-            qnn.parameters(),
-            lr=float(cfg["lr"]),
-        )
+    opt_name = str(cfg.get("optimizer", "adam")).lower()
+    lr = float(cfg["lr"])
+
+    if opt_name == "adam":
+        optimizer = qml.AdamOptimizer(stepsize=lr)
+    elif opt_name == "sgd":
+        optimizer = qml.GradientDescentOptimizer(stepsize=lr)
     else:
-        raise ValueError(f"Unknown optimizer '{opt_name}'.")
+        raise ValueError("Supported optimizers: 'adam', 'sgd'.")
 
-    lr_decay = float(cfg.get("lr_decay", 0.0))
-    scheduler = ExponentialLR(
-        optimizer,
-        gamma=max(0.0, 1.0 - lr_decay),
-    )
-
-    train_loader = DataLoader(
-        TensorDataset(
-            torch.tensor(X_train, dtype=torch.float32),
-            torch.tensor(y_train, dtype=torch.long),
-        ),
-        batch_size=int(cfg["batch_size"]),
-        shuffle=True,
-    )
-
+    batch_size = int(cfg["batch_size"])
     epochs = int(cfg["epochs"])
     margin = float(cfg.get("hinge_margin", 1.0))
     output_dir = str(cfg["output_dir"])
     os.makedirs(output_dir, exist_ok=True)
 
+    def cost_fn(current_params, xb, yb):
+        outputs = [qnode(x, current_params) for x in xb]
+        outputs = qml.numpy.stack(outputs)
+
+        y_signed = 1.0 - 2.0 * yb.astype(float)
+        losses = qml.numpy.maximum(0.0, margin - outputs * y_signed)
+        return qml.numpy.mean(losses)
+
+    history = []
     best_val_f1 = -1.0
     best_epoch = -1
-    best_ckpt = None
     best_metrics: Dict[str, Any] = {}
-    history: list[Dict[str, float]] = []
+    best_params = None
 
     for epoch in range(epochs):
-        qnn.train()
-        epoch_losses: list[float] = []
         t0 = time.time()
+        batch_losses = []
 
-        progress = tqdm(
-            train_loader,
-            desc=f"{run_name} | epoch {epoch + 1}/{epochs}",
-            leave=False,
+        for xb, yb in make_minibatches(X_train, y_train, batch_size, rng):
+            xb_q = qml.numpy.array(xb, requires_grad=False)
+            yb_q = qml.numpy.array(yb, requires_grad=False)
+
+            params, batch_loss = optimizer.step_and_cost(
+                lambda p: cost_fn(p, xb_q, yb_q),
+                params,
+            )
+            batch_losses.append(float(batch_loss))
+
+        train_loss = float(np.mean(batch_losses)) if batch_losses else float("nan")
+
+        val_stats = evaluate_qnode(
+            qnode=qnode,
+            X=X_val,
+            y=y_val,
+            params=params,
         )
 
-        for xb, yb in progress:
-            xb = xb.to(device_str)
-            yb = yb.to(device_str)
-
-            optimizer.zero_grad()
-            certainty = qnn(xb)
-            loss = hinge_loss(certainty, yb, margin=margin)
-            loss.backward()
-            optimizer.step()
-
-            loss_value = float(loss.detach().cpu().item())
-            epoch_losses.append(loss_value)
-            progress.set_postfix(loss=f"{loss_value:.4f}")
-
-        scheduler.step()
-
-        train_loss = float(np.mean(epoch_losses)) if epoch_losses else float("nan")
-
-        val_stats = eval_module.evaluate_model(
-            qnn,
-            X_val,
-            y_val,
-            batch_size=int(cfg["batch_size"]),
-            device=device_str,
-            desc=f"{run_name}-eval",
-        )
-
-        epoch_summary = {
-            "epoch": float(epoch + 1),
+        summary = {
+            "epoch": epoch + 1,
             "train_loss": train_loss,
             "val_f1": float(val_stats["f1"]),
             "val_accuracy": float(val_stats["accuracy"]),
@@ -210,10 +246,9 @@ def train(
             "val_roc_auc": float(val_stats["roc_auc"]),
             "cert_mean": float(val_stats["cert_mean"]),
             "cert_std": float(val_stats["cert_std"]),
-            "lr": float(optimizer.param_groups[0]["lr"]),
             "epoch_time_sec": float(time.time() - t0),
         }
-        history.append(epoch_summary)
+        history.append(summary)
 
         print(
             f"[{run_name}] epoch {epoch + 1:03d}/{epochs:03d} | "
@@ -222,35 +257,32 @@ def train(
             f"acc={val_stats['accuracy']:.4f} | "
             f"prec={val_stats['precision']:.4f} | "
             f"rec={val_stats['recall']:.4f} | "
-            f"auc={val_stats['roc_auc']:.4f} | "
-            f"lr={optimizer.param_groups[0]['lr']:.6f}"
+            f"auc={val_stats['roc_auc']:.4f}"
         )
-
-        if use_wandb:
-            wandb.log(epoch_summary)
 
         if float(val_stats["f1"]) > best_val_f1:
             best_val_f1 = float(val_stats["f1"])
             best_epoch = epoch + 1
             best_metrics = val_stats
-
-            best_ckpt = os.path.join(output_dir, f"{run_name}.pt")
-            save_checkpoint(
-                best_ckpt,
-                model=qnn,
-                cfg=cfg,
-                epoch=best_epoch,
-                metrics=val_stats,
-            )
+            best_params = np.array(params, dtype=float)
 
     history_path = os.path.join(output_dir, f"{run_name}_history.json")
     with open(history_path, "w", encoding="utf-8") as f:
         json.dump(history, f, indent=2)
 
+    best_path = os.path.join(output_dir, f"{run_name}_best.npz")
+    np.savez(
+        best_path,
+        params=np.asarray(best_params, dtype=float),
+        config=json.dumps(cfg),
+        best_epoch=best_epoch,
+        best_val_f1=best_val_f1,
+    )
+
     result = {
         "best_val_f1": float(best_val_f1),
         "best_epoch": int(best_epoch),
-        "best_ckpt": best_ckpt,
+        "best_ckpt": best_path,
         "history_json": history_path,
         "best_accuracy": float(best_metrics.get("accuracy", float("nan"))),
         "best_precision": float(best_metrics.get("precision", float("nan"))),
@@ -259,10 +291,6 @@ def train(
         "best_cert_mean": float(best_metrics.get("cert_mean", float("nan"))),
         "best_cert_std": float(best_metrics.get("cert_std", float("nan"))),
     }
-
-    if use_wandb:
-        wandb.log({"best_val_f1": best_val_f1, "best_epoch": best_epoch})
-        wandb.finish()
 
     print(
         f"[{run_name}] done | "
@@ -293,14 +321,10 @@ def load_config(path: str) -> Dict[str, Any]:
         "layer_type",
         "optimizer",
         "lr",
-        "momentum",
-        "lr_decay",
         "batch_size",
         "hinge_margin",
         "epochs",
         "output_dir",
-        "use_cuda",
-        "use_wandb",
     ]
     missing = [k for k in required_keys if k not in cfg]
     if missing:

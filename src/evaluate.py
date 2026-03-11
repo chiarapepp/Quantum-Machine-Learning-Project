@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Callable
 
 import numpy as np
-import torch
-from torch.utils.data import DataLoader, TensorDataset
 from sklearn.metrics import (
     accuracy_score,
     f1_score,
@@ -12,7 +10,6 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
 )
-from tqdm import tqdm
 
 from certainty_factor import (
     certainty_from_expval,
@@ -21,83 +18,68 @@ from certainty_factor import (
 )
 
 
-def evaluate_model(
-    model: torch.nn.Module,
+def predict_outputs(
+    qnode: Callable,
+    X: np.ndarray,
+    params: np.ndarray,
+) -> np.ndarray:
+    """
+    Run the QNN on all samples and return raw scalar outputs.
+
+    Assumption:
+    - qnode(x, params) returns one scalar per sample, typically the expectation
+      value of the measured Pauli observable.
+    """
+    X = np.asarray(X, dtype=float)
+
+    outputs = [qnode(x, params) for x in X]
+    return np.asarray(outputs, dtype=float).reshape(-1)
+
+
+def evaluate_qnode(
+    qnode: Callable,
     X: np.ndarray,
     y: np.ndarray,
-    batch_size: int = 64,
-    device: str = "cpu",
-    desc: str = "eval",
+    params: np.ndarray,
     threshold: float = 0.0,
     benign_label: int = 0,
     malicious_label: int = 1,
 ) -> Dict[str, Any]:
     """
-    Run inference on a dataset and return standard classification metrics.
+    Evaluate a PennyLane QNode on a dataset.
 
     Assumptions
     -----------
-    model.forward(x_batch) returns one scalar per sample representing the
-    final expectation value of the measured observable, which is also the
-    certainty factor C in [-1, 1].
+    - qnode(x, params) returns one scalar per sample.
+    - In noiseless mode this scalar is the expectation value of the measured
+      Pauli observable, and is converted into the certainty factor C in [-1, 1].
 
     Decision rule
     -------------
     - C >= threshold -> benign_label
     - C <  threshold -> malicious_label
 
-    Current project convention
-    --------------------------
+    Default convention
+    ------------------
     - benign_label = 0
     - malicious_label = 1
 
-    Metric convention
-    -----------------
-    Precision, recall, and F1 are computed with malicious_label as the
-    positive class, which is the most natural choice for intrusion detection.
-
-    Returns
+    Metrics
     -------
-    dict with:
-        f1, accuracy, precision, recall, roc_auc,
-        cert_mean, cert_std,
-        conf_mean, conf_std,
-        Cs, confidence, y, preds
+    Precision, recall, and F1 are computed with malicious_label as the
+    positive class.
     """
-    model.eval()
-
-    X = np.asarray(X)
+    X = np.asarray(X, dtype=float)
     y = np.asarray(y, dtype=int)
 
-    ds = TensorDataset(
-        torch.tensor(X, dtype=torch.float32),
-        torch.tensor(y, dtype=torch.long),
-    )
-    loader = DataLoader(ds, batch_size=batch_size, shuffle=False)
+    if len(X) == 0:
+        raise ValueError("Empty dataset passed to evaluate_qnode().")
+    if len(X) != len(y):
+        raise ValueError("X and y must have the same length.")
 
-    all_c: list[np.ndarray] = []
-    all_y: list[np.ndarray] = []
+    raw_outputs = predict_outputs(qnode=qnode, X=X, params=params)
 
-    with torch.no_grad():
-        for xb, yb in tqdm(loader, desc=desc, leave=False):
-            xb = xb.to(device)
-            out = model(xb)
-
-            if isinstance(out, torch.Tensor):
-                out_np = out.detach().cpu().numpy()
-            else:
-                out_np = np.asarray(out, dtype=float)
-
-            all_c.append(np.asarray(out_np, dtype=float).reshape(-1))
-            all_y.append(yb.detach().cpu().numpy().reshape(-1))
-
-    if not all_c:
-        raise ValueError("Empty dataset passed to evaluate_model().")
-
-    Cs_raw = np.concatenate(all_c, axis=0)
-    ys = np.concatenate(all_y, axis=0)
-
-    Cs = np.array([certainty_from_expval(v) for v in Cs_raw], dtype=float)
+    Cs = np.array([certainty_from_expval(v) for v in raw_outputs], dtype=float)
 
     preds = predict_many_from_certainty(
         Cs,
@@ -107,21 +89,17 @@ def evaluate_model(
     )
     confs = confidences_from_certainties(Cs)
 
-    f1 = f1_score(ys, preds, pos_label=malicious_label, zero_division=0)
-    acc = accuracy_score(ys, preds)
-    prec = precision_score(ys, preds, pos_label=malicious_label, zero_division=0)
-    rec = recall_score(ys, preds, pos_label=malicious_label, zero_division=0)
+    f1 = f1_score(y, preds, pos_label=malicious_label, zero_division=0)
+    acc = accuracy_score(y, preds)
+    prec = precision_score(y, preds, pos_label=malicious_label, zero_division=0)
+    rec = recall_score(y, preds, pos_label=malicious_label, zero_division=0)
 
     try:
-        # Build a score for the malicious class so roc_auc_score is consistent.
-        #
-        # Under the default rule:
-        #   C >= 0 -> benign
-        #   C <  0 -> malicious
-        #
-        # Therefore, larger maliciousness should correspond to smaller C.
+        # Larger maliciousness must correspond to larger score for class 1.
+        # Since malicious is predicted for smaller certainty values,
+        # we flip certainty into a malicious-class score.
         malicious_score = (-Cs + 1.0) / 2.0
-        roc = roc_auc_score(ys, malicious_score)
+        roc = roc_auc_score(y, malicious_score)
     except Exception:
         roc = float("nan")
 
@@ -135,9 +113,10 @@ def evaluate_model(
         "cert_std": float(np.std(Cs)),
         "conf_mean": float(np.mean(confs)),
         "conf_std": float(np.std(confs)),
+        "raw_outputs": raw_outputs,
         "Cs": Cs,
         "confidence": confs,
-        "y": ys,
+        "y": y,
         "preds": preds,
     }
 
@@ -150,8 +129,8 @@ def certainty_stats(
     """
     Compute certainty-factor statistics split by correct and incorrect predictions.
 
-    Useful for analysing whether correct predictions tend to lie farther from 0,
-    while uncertain predictions concentrate near 0.
+    Useful for understanding whether correct predictions tend to be farther from
+    0, while uncertain predictions concentrate near 0.
     """
     Cs = np.asarray(certainties, dtype=float)
     yt = np.asarray(y_true, dtype=int)
@@ -180,3 +159,35 @@ def certainty_stats(
         "frac_low_conf_0.2": float(np.mean(confs < 0.2)),
         "frac_low_conf_0.5": float(np.mean(confs < 0.5)),
     }
+
+
+def evaluate_with_stats(
+    qnode: Callable,
+    X: np.ndarray,
+    y: np.ndarray,
+    params: np.ndarray,
+    threshold: float = 0.0,
+    benign_label: int = 0,
+    malicious_label: int = 1,
+) -> Dict[str, Any]:
+    """
+    Convenience wrapper:
+    - runs evaluation
+    - adds certainty-factor statistics
+    """
+    out = evaluate_qnode(
+        qnode=qnode,
+        X=X,
+        y=y,
+        params=params,
+        threshold=threshold,
+        benign_label=benign_label,
+        malicious_label=malicious_label,
+    )
+
+    out["certainty_stats"] = certainty_stats(
+        certainties=out["Cs"],
+        y_true=out["y"],
+        y_pred=out["preds"],
+    )
+    return out
