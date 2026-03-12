@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from typing import Iterable, Literal
 import numpy as np
 

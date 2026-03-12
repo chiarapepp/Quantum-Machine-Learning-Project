@@ -1,6 +1,6 @@
-from __future__ import annotations
 from typing import Callable, List
 import pennylane as qml
+from pennylane import numpy as np
 from encoding import apply_rx_encoding
 
 

@@ -2,13 +2,12 @@
 Data loading and quantum encoding utilities.
 
 - load the balanced processed CSV
-- validate required columns
 - perform the stratified 85/15 split
 - fit the QuantumEncoder on the training split only
 - transform train and test splits into angle-encoded arrays
 """
 
-from __future__ import annotations
+from json import encoder
 from typing import Any, Dict
 import os
 import numpy as np
@@ -88,7 +87,8 @@ def load_encoded_splits(
     y_test = split_pack["y_test"]
 
     encoder = enc_module.QuantumEncoder(n_bins=n_bins)
-    X_train = encoder.fit_transform(X_train_df)
+    encoder.fit(X_train_df)
+    X_train = encoder.transform(X_train_df)
     X_test = encoder.transform(X_test_df)
 
     print(

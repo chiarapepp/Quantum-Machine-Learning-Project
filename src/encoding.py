@@ -1,12 +1,10 @@
-from __future__ import annotations
-from typing import Dict, Iterable, List, Sequence
+from typing import Optional
 import numpy as np
 import pandas as pd
 import pennylane as qml
 
-
-ANGLE_QUANTUM = np.deg2rad(0.25)  # every angle is a multiple of this, per the paper's encoding scheme
-
+# every angle is a multiple of this, per the paper's encoding scheme
+ANGLE_QUANTUM = np.deg2rad(0.25)  
 
 FEATURE_COLUMNS = [
     "PROTOCOL",
@@ -19,8 +17,11 @@ FEATURE_COLUMNS = [
     "FLOW_DURATION_MILLISECONDS",
 ]
 
+# Features with a limited number of unique values → categorical encoding
 CATEGORICAL_FEATURES = ["PROTOCOL", "TCP_FLAGS"]
 
+ 
+# Features with many unique values → percentile-based binning
 CONTINUOUS_FEATURES = [
     "L7_PROTO",
     "IN_BYTES",
@@ -30,14 +31,17 @@ CONTINUOUS_FEATURES = [
     "FLOW_DURATION_MILLISECONDS",
 ]
 
+N_QUBITS = len(FEATURE_COLUMNS)  # one qubit per feature → 8 qubits
 
 class QuantumEncoder:
     def __init__(self, n_bins: int = 100):
+
         self.n_bins = n_bins
-        self.cat_maps = {}
-        self.percentile_edges = {}
+        self.cat_maps: dict = {}     # col → {value: bin_index}
+        self.percentile_edges: dict = {}    # col → np.ndarray of bin edges
 
     def fit(self, df: pd.DataFrame):
+        
         df = df[FEATURE_COLUMNS].copy()
 
         for col in CATEGORICAL_FEATURES:
@@ -52,36 +56,43 @@ class QuantumEncoder:
 
     def transform(self, df: pd.DataFrame) -> np.ndarray:
         df = df[FEATURE_COLUMNS].copy()
-        encoded = []
+        n = len(df)
+        angles = np.zeros((n, N_QUBITS), dtype=float)
+        
+        for j, col in enumerate(FEATURE_COLUMNS):
+            col_vals = df[col].astype(float).values
+            
+            if col in CATEGORICAL_FEATURES:
+                mapping = self.cat_maps[col]
+                n_cats = len(mapping)
+                # For unseen values at inference time, fall back to π/2 (neutral)
+                idx_arr = np.array([mapping.get(v, (n_cats - 1) / 2) for v in col_vals])
+                    
+                theta_arr = (
+                    np.zeros(n) if n_cats == 1
+                    else (idx_arr / (n_cats - 1)) * np.pi
+                )
+            else:
+                edges = self.percentile_edges[col]
+                # Use np.searchsorted to find the bin index for each value
+                bin_indices = np.searchsorted(edges, col_vals, side="right") - 1
+                bin_indices = np.clip(bin_indices, 0, self.n_bins - 1)
 
-        for _, row in df.iterrows():
-            angles = []
-            for col in FEATURE_COLUMNS:
-                value = float(row[col])
+                # Percentile rank x → x * π / n_bins
+                theta_arr = (bin_indices * np.pi) / self.n_bins
 
-                if col in CATEGORICAL_FEATURES:
-                    mapping = self.cat_maps[col]
-                    idx = mapping[value]
-                    n = len(mapping)
-                    theta = 0.0 if n == 1 else (idx / (n - 1)) * np.pi
-                else:
-                    edges = self.percentile_edges[col]
-                    bin_index = np.searchsorted(edges, value, side="right") - 1
-                    bin_index = int(np.clip(bin_index, 0, self.n_bins - 1))
-                    theta = (bin_index * np.pi) / self.n_bins
+            # Quantize to nearest 0.25° step, then clamp to [0, π]
+            theta_arr = np.round(theta_arr / ANGLE_QUANTUM) * ANGLE_QUANTUM
+            angles[:, j] = np.clip(theta_arr, 0.0, np.pi)
 
-                theta = np.round(theta / ANGLE_QUANTUM) * ANGLE_QUANTUM
-                theta = float(np.clip(theta, 0.0, np.pi))
-                angles.append(theta)
+        return angles
 
-            encoded.append(angles)
-
-        return np.asarray(encoded, dtype=float)
-
+    
     def fit_transform(self, df: pd.DataFrame) -> np.ndarray:
         return self.fit(df).transform(df)
 
 
-def apply_rx_encoding(x):
-    for wire, theta in enumerate(x):
-        qml.RX(theta, wires=wire)
+def apply_rx_encoding(x: np.ndarray) -> None:
+    qml.AngleEmbedding(x, wires=range(N_QUBITS), rotation="X")
+
+

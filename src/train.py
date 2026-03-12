@@ -166,7 +166,7 @@ def train(
     y_val: np.ndarray,
     cfg: Dict[str, Any],
 ) -> Dict[str, Any]:
-    run_name = str(cfg.get("run_name", "trial"))
+    run_name = "miao"
 
     qnode, n_params = build_qnode(
         arch=str(cfg["arch"]),
@@ -200,7 +200,7 @@ def train(
     os.makedirs(output_dir, exist_ok=True)
 
     def cost_fn(current_params, xb, yb):
-        outputs = [qnode(x, current_params) for x in xb]
+        # outputs = [qnode(x, current_params) for x in xb]
         outputs = qml.numpy.stack(outputs)
 
         y_signed = 1.0 - 2.0 * yb.astype(float)
@@ -226,6 +226,8 @@ def train(
                 params,
             )
             batch_losses.append(float(batch_loss))
+            print(batch_loss)
+            exit()
 
         train_loss = float(np.mean(batch_losses)) if batch_losses else float("nan")
 
