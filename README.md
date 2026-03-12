@@ -1,105 +1,128 @@
 
-# Quantum Network Anomaly Detection — Reproduction
+# Quantum Machine Learning for Network Anomaly Detection
 
-This repository contains code to reproduce a quantum-assisted network anomaly
-detection pipeline (implementation inspired by Kukliansky et al.). The code in
-this workspace provides preprocessing and a lightweight quantum neural network
-implementation along with training tooling.
+## Overview 
+This project investigates the use of **Quantum Neural Networks** (QNNs) for **network anomaly detection**, following the methodology presented in the paper:
+[*“Network Anomaly Detection Using Quantum Neural Networks on Noisy Quantum Computers”*](https://ieeexplore.ieee.org/document/10415536).
 
-Key ideas implemented here:
+The goal is to reproduce and analyze several QNN architectures designed to operate on **NISQ** (Noisy Intermediate-Scale Quantum) hardware, evaluating their capability to classify network traffic as benign or anomalous.
 
-- Quantized-angle encoding of NetFlow features into qubit rotation angles.
-- A small "Simple" QNN architecture built from two-qubit rotation blocks.
-- Training and utilities to save checkpoints and diagnostics.
+The project implements and compares four quantum models proposed in the paper:
+- Simple variational circuit
+- Tree Tensor Network (TTN)
+- Multi-scale Entanglement Renormalization Ansatz (MERA)
+- Quantum Convolutional Neural Network (QCNN)
 
-Project layout (top-level items you'll care about):
+All architectures share the same **input encoding scheme** and produce a **single-qubit measurement** used for binary classification (for more details on the architecture reference the report in the folder)
 
-- `src/` — main Python sources
-  - `src/dataset.py` — dataset loading and preprocessing helpers
-  - `src/encoding.py` — quantized-angle encoding helpers
-  - `src/preprocessing.py` — preprocessing utilities and feature selection
-  - `src/qnn_simple.py` — quantum circuit / model builder for the Simple QNN
-  - `src/certainty_factor.py` — certainty / confidence utilities
-  - `src/architectures.py` — model architecture variants and helpers
-  - `src/train.py` — training pipeline, checkpointing and basic logging
-- `data/` — raw and processed datasets (CSV and encoded artifacts)
-- `results/` — training outputs and checkpoints
-- `configs/` — example configuration (e.g. `training.yml`)
-- `requirements.txt` — pinned Python dependencies used during development
-- `paper.md` — reference paper and notes
+The experiments are performed using PennyLane, enabling simulation of quantum circuits and experimentation with noisy quantum devices.
 
-Note: filenames above match the current repository. If you previously used a
-different fork or release that referenced other script names, please use the
-files under `src/` in this workspace.
+### Main Objective
+- Reproduce the architectures proposed in the paper.
+- Study how different quantum circuit topologies affect classification performance.
+- Investigate the trade-off between expressibility and hardware feasibility on NISQ devices.
+- Analyze the impact of noise models on QNN performance.
 
-## Quick setup (Linux / bash)
-
-1. Create and activate a virtual environment (recommended):
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
+### Project Structure
+```
+Quantum_Anomaly_Detection/
+│
+├── src/
+│   ├── architectures.py        # QNN architectures (Simple, TTN, MERA, QCNN)
+│   ├── encoding.py             # Feature encoding into quantum states
+│   ├── model.py                # QNN model wrapper and circuit construction
+│   ├── dataset.py              # Dataset loading and preprocessing
+│   ├── train.py                # Training loop
+│   ├── evaluate.py             # Evaluation metrics and testing
+│   └── certainty_factor.py     # Prediction confidence computation
+│
+├── draw_circuits.py            # Utility to visualize quantum circuits
+├── main.py                     # Main script for training experiments
+│
+├── data/                       # Processed network traffic dataset
+├── images/                     # Circuit visualizations and plots
+│
+└── README.md                   # Project documentation
 ```
 
-2. Install dependencies:
+### Requiriments 
+
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/chiarapepp/Quantum-Machine-Learning-Project.git
+   ```
+2. Install the required libraries:
+   ```bash
+   pip install -r requirements.txt
+   ```
+3. (Optional but recommended) Log in to Weights & Biases:
+    ```bash
+    wandb login
+    ```
+
+### Dataset
+Place the raw dataset in `data/raw/`:
+```
+data/raw/NF-UNSW-NB15-v2.csv
+```
+A balanced preprocessed version is already provided at `data/processed/nf_unsw_balanced.csv`.
+
+## Usage
+
+Each architecture has its own training script. Run from the repository root:
 
 ```bash
-pip install -r requirements.txt
+python src/train_simple.py
+python src/train_ttn.py
+python src/train_mera.py
+python src/train_qcnn.py
 ```
 
-Tip: check `requirements.txt` for TF / TFQ versions if you plan to run on GPU or
-use TensorFlow Quantum — these libraries have strict compatibility requirements.
-
-## Preprocess / Encode
-
-Preprocessing and encoding helpers live under `src/` (see `src/dataset.py` and
-`src/encoding.py`). Use those modules to convert the raw CSV under
-`data/raw/` to processed arrays or a compressed `.npz` with your chosen
-encodings. The repository does not enforce a single CLI entrypoint for
-preprocessing; import the helpers from Python or extend `src/train.py` to add
-a dedicated CLI command if you need one.
-
-Example (run from repository root) — run the training script which can accept
-an encoded `.npz` or re-run preprocessing depending on flags supported by the
-script:
-
+To visualize the quantum circuits:
 ```bash
-python src/train.py --npz data/processed/nf_encoded.npz --out-dir experiments/test_run --n-epochs 20 --sample-limit 1000
+python src/draw_circuits.py
 ```
 
-The `--npz`/`--csv` flags and other arguments are handled by the script in
-`src/train.py` (inspect that file for the exact CLI). `--sample-limit` is
-useful for quick debugging.
+To evaluate a checkpoint under depolarizing noise:
+```bash
+python src/noise_eval.py
+```
 
-## Results & Checkpoints
+## Project Layout
 
-Training outputs are written to `results/` (or to the directory you pass as
-`--out-dir`). Checkpoints and logs are saved so you can evaluate runs later.
+- `src/architectures.py` — quantum circuit builders for all four architectures
+- `src/encoding.py` — quantized-angle encoding (`QuantumEncoder`)
+- `src/dataset.py` — dataset loading and class-balanced splitting
+- `src/certainty_factor.py` — certainty and confidence utilities
+- `src/train_simple.py`, `train_ttn.py`, `train_mera.py`, `train_qcnn.py` — training pipelines
+- `src/evaluate.py` — evaluation metrics (accuracy, F1, AUC, certainty stats)
+- `src/noise_eval.py` — depolarizing noise model and noisy evaluation
+- `src/draw_circuits.py` — circuit diagram generation
+- `data/` — raw and processed datasets
+- `results/` — training checkpoints and grid-search summaries
+- `figures/circuits/` — saved circuit diagrams
+- `configs/` — example run configurations
 
-## Reproducibility
+## Model Parameters (8 qubits)
 
-- Save any generated encoding tables and `manifest.json` (if produced by a run)
-  to reproduce experiments.
-- The repository follows deterministic preprocessing choices where possible
-  (e.g., fixed random seeds for resampling). Check the preprocessing code for
-  the exact seeds and resampling approach.
+| Architecture | Number of Parameters |
+|--------------|----------------------|
+| Simple (L=2) | 64                   |
+| TTN          | 42                   |
+| MERA         | 66                   |
+| QCNN         | 30                   |
 
-## Development & Tests (suggestions)
+## Results (NF-UNSW-NB15-v2, best validation F1)
 
-- Add unit tests under a `tests/` folder to validate encoding correctness,
-  circuit shapes, and the certainty factor computation. Consider mocking TFQ
-  in tests so CI can run without specialized hardware.
-- Add a short example Jupyter notebook that runs a tiny end-to-end experiment
-  with synthetic data if you'd like a quick demo that doesn't require TFQ.
+| Architecture | Best Val F1 |
+|--------------|-------------|
+| TTN (L=2)    | 0.748       |
 
-## Notes and next steps
 
-- I updated this README to reflect the current repository layout and Linux
-  usage. If you'd like, I can:
-  1. Add a small example notebook (`notebooks/demo.ipynb`) with synthetic data.
-  2. Add a dedicated CLI for preprocessing (if you prefer `python -m src.preprocess`).
-  3. Add unit tests for encoding and the certainty factor.
+## References
 
-If you'd like one of the follow-ups implemented now, tell me which and I'll add
-it.
+- [Dataset: NF-UNSW-NB15-v2 (NetFlow-based network intrusion detection) ](hhttps://espace.library.uq.edu.au/view/UQ:ffbb0c1) *, The University of Queensland.* 
+- [Network Anomaly Detection Using Quantum Neural Networks on Noisy Quantum Computers](https://ieeexplore.ieee.org/document/10415536)*, Kukliansky et al., EEE Transactions on Quantum
+Engineering, 5:1–11, 2024.*
+
+

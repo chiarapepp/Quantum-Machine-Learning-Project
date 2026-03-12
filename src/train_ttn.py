@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 
 from pennylane import numpy as np
+import pennylane as qml
 from tqdm.auto import tqdm
 import wandb
 
@@ -35,8 +36,6 @@ def train(
     sgd_decay=0.0,
     wandb_project="qml-project",
     wandb_run_name=None,
-    wandb_mode="online",
-    log_batch_metrics=False,
 ):
     np.random.seed(seed)
 
@@ -53,7 +52,8 @@ def train(
     num_params = ttn_num_params(n_feature_qubits)
     weights = np.random.random(num_params, requires_grad=True) * np.pi
 
-    qnode = build_ttn_qnn(n_qubits=n_feature_qubits)
+    dev = qml.device("lightning.qubit", wires=n_feature_qubits)
+    qnode = build_ttn_qnn(n_qubits=n_feature_qubits, dev=dev)
 
     default_run_name = f"ttn_qnn_opt-{optimizer_name}_fq{n_feature_qubits}_lr{lr}"
     if optimizer_name == "sgd":
@@ -64,7 +64,7 @@ def train(
     wandb.init(
         project=wandb_project,
         name=run_name,
-        mode=wandb_mode,
+        mode="online",
         config={
             "model": "ttn_qnn",
             "optimizer": optimizer_name,
@@ -133,18 +133,6 @@ def train(
 
             cost_value = float(cost)
             batch_costs.append(cost_value)
-
-            if log_batch_metrics:
-                wandb.log(
-                    {
-                        "batch/loss": cost_value,
-                        "batch/lr": effective_lr,
-                        "batch/size": len(xb),
-                        "global_step": global_step,
-                        "epoch": epoch + 1,
-                    },
-                    step=global_step,
-                )
 
             batch_bar.set_postfix(batch_loss=f"{cost_value:.4f}", lr=f"{effective_lr:.5f}")
             global_step += 1
@@ -225,7 +213,8 @@ def parse_args():
 
     parser.add_argument("--processed-csv", type=str, default="data/processed/nf_unsw_balanced.csv", help="Path to processed CSV")
     parser.add_argument("--raw-csv", type=str, default="data/raw/NF-UNSW-NB15-v2.csv", help="Path to raw CSV used if processed CSV is missing")
-    parser.add_argument("--test-size", type=float, default=0.15, help="Validation/test split fraction")
+    parser.add_argument("--test-size", type=float, default=0.15, help="Test split fraction")
+    parser.add_argument("--val-size", type=float, default=0.15, help="Validation split fraction (of train set)")
     parser.add_argument("--random-state", type=int, default=123, help="Random state for dataset split")
     parser.add_argument("--n-bins", type=int, default=100, help="Number of percentile bins for encoding")
 
@@ -240,8 +229,6 @@ def parse_args():
 
     parser.add_argument("--wandb-project", type=str, default="qml-project", help="Weights & Biases project name")
     parser.add_argument("--wandb-run-name", type=str, default=None, help="Weights & Biases run name")
-    parser.add_argument("--wandb-mode", type=str, default="online", choices=["online", "offline", "disabled"], help="Weights & Biases mode")
-    parser.add_argument("--log-batch-metrics", action="store_true", help="Log batch loss to wandb")
 
     parser.add_argument("--save-dir", type=str, default="outputs/ttn", help="Directory where final artifacts are saved")
     parser.add_argument("--save-best-weights", action="store_true", help="Save best validation weights to disk")
@@ -265,17 +252,18 @@ if __name__ == "__main__":
     pack = data_utils.load_encoded_splits(
         processed_csv=processed_csv,
         test_size=args.test_size,
+        val_size=args.val_size,
         random_state=args.random_state,
         n_bins=args.n_bins,
     )
 
-    print(f"[train] encoded data loaded | train={pack['X_train'].shape}, test={pack['X_test'].shape}")
+    print(f"[train] encoded data loaded | train={pack['X_train'].shape}, val={pack['X_val'].shape}, test={pack['X_test'].shape}")
 
     result = train(
         X_train=pack["X_train"],
         y_train=pack["y_train"],
-        X_val=pack["X_test"],
-        y_val=pack["y_test"],
+        X_val=pack["X_val"],
+        y_val=pack["y_val"],
         lr=args.lr,
         batch_size=args.batch_size,
         epochs=args.epochs,
@@ -285,8 +273,6 @@ if __name__ == "__main__":
         sgd_decay=args.sgd_decay,
         wandb_project=args.wandb_project,
         wandb_run_name=args.wandb_run_name,
-        wandb_mode=args.wandb_mode,
-        log_batch_metrics=args.log_batch_metrics,
     )
 
     if args.save_best_weights:

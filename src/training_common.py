@@ -28,7 +28,8 @@ def predict_dataset(weights, features, quantum_model):
     """Run model inference over a whole dataset."""
     return np.array([quantum_model(x, weights) for x in features])
 
-
+# Since hinge loss works with labels in {-1, +1}, we need to convert the original {0, 1} labels.
+# 0/benign -> -1 and 1/malign -> +1
 def to_pm_one_labels(labels):
     """Convert binary labels from {0, 1} to {-1, +1}."""
     labels = np.asarray(labels)

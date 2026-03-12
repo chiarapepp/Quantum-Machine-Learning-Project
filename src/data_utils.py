@@ -63,12 +63,17 @@ def split_processed_dataframe(
 def load_encoded_splits(
     processed_csv: str,
     test_size: float = 0.15,
+    val_size: float = 0.15,
     random_state: int = 1,
     n_bins: int = 100,
 ) -> Dict[str, Any]:
     """
-    Load the balanced processed CSV, split it, fit the QuantumEncoder on train only,
-    and return encoded train/test arrays.
+    Load the balanced processed CSV, split into train/val/test, fit the
+    QuantumEncoder on train only, and return encoded arrays.
+
+    Split procedure:
+    1. Stratified train/test split (test_size fraction of full dataset).
+    2. Stratified train/val split (val_size fraction of the remaining train set).
     """
     if not os.path.exists(processed_csv):
         raise FileNotFoundError(f"Processed CSV not found: {processed_csv}")
@@ -81,31 +86,48 @@ def load_encoded_splits(
         random_state=random_state,
     )
 
-    X_train_df = split_pack["X_train_df"]
+    X_trainval_df = split_pack["X_train_df"]
     X_test_df = split_pack["X_test_df"]
-    y_train = split_pack["y_train"]
+    y_trainval = split_pack["y_train"]
     y_test = split_pack["y_test"]
+
+    X_train_df, X_val_df, y_train, y_val = train_test_split(
+        X_trainval_df,
+        y_trainval,
+        test_size=val_size,
+        random_state=random_state,
+        shuffle=True,
+        stratify=y_trainval,
+    )
+    X_train_df = X_train_df.reset_index(drop=True)
+    X_val_df = X_val_df.reset_index(drop=True)
+    y_train = np.asarray(y_train, dtype=int)
+    y_val = np.asarray(y_val, dtype=int)
 
     encoder = enc_module.QuantumEncoder(n_bins=n_bins)
     encoder.fit(X_train_df)
     X_train = encoder.transform(X_train_df)
+    X_val = encoder.transform(X_val_df)
     X_test = encoder.transform(X_test_df)
 
     print(
         f"[data_utils] Encoded splits -> "
-        f"train: {X_train.shape}, test: {X_test.shape}"
+        f"train: {X_train.shape}, val: {X_val.shape}, test: {X_test.shape}"
     )
     print(
         f"[data_utils] Label balance -> "
-        f"train: {np.bincount(y_train)}, test: {np.bincount(y_test)}"
+        f"train: {np.bincount(y_train)}, val: {np.bincount(y_val)}, test: {np.bincount(y_test)}"
     )
 
     return {
         "X_train": X_train,
         "y_train": y_train,
+        "X_val": X_val,
+        "y_val": y_val,
         "X_test": X_test,
         "y_test": y_test,
         "X_train_df": X_train_df,
+        "X_val_df": X_val_df,
         "X_test_df": X_test_df,
         "encoder": encoder,
     }

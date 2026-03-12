@@ -18,36 +18,17 @@ def _rot_rot_cnot(params, wires: List[int]) -> None:
 
 
 def _parse_layer_type(layer_type: str) -> List[str]:
-    """
-    Parse the paper's Simple-layer variants.
-
-    Paper notation:
-    - XY   -> XXYY
-    - ZX   -> ZZXX
-    - ZY   -> ZZYY
-    - ZXY  -> ZZXXYY
-    """
-    lt = layer_type.upper().replace("_", "").replace("-", "")
-    aliases = {
-        "XY": "XXYY",
-        "ZX": "ZZXX",
-        "ZY": "ZZYY",
-        "ZXY": "ZZXXYY",
-    }
-    lt = aliases.get(lt, lt)
-
     mapping = {
         "ZZXXYY": ["ZZ", "XX", "YY"],
         "ZZXX": ["ZZ", "XX"],
         "XXYY": ["XX", "YY"],
         "ZZYY": ["ZZ", "YY"],
     }
-    if lt not in mapping:
+    if layer_type not in mapping:
         raise ValueError(
-            f"Unknown layer_type '{layer_type}'. Supported: "
-            "XY/XXYY, ZX/ZZXX, ZY/ZZYY, ZXY/ZZXXYY."
+            f"Unknown layer_type '{layer_type}'. Supported: XXYY, ZZXX, ZZYY, ZZXXYY."
         )
-    return mapping[lt]
+    return mapping[layer_type]
 
 
 def simple_num_params(
