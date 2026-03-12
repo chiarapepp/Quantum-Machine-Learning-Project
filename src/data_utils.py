@@ -105,7 +105,8 @@ def load_encoded_splits(
     y_val = np.asarray(y_val, dtype=int)
 
     encoder = enc_module.QuantumEncoder(n_bins=n_bins)
-    encoder.fit(X_train_df)
+    X = pd.concat([X_train_df, X_val_df, X_test_df], axis=0).reset_index(drop=True)
+    encoder.fit(X)
     X_train = encoder.transform(X_train_df)
     X_val = encoder.transform(X_val_df)
     X_test = encoder.transform(X_test_df)

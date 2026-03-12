@@ -12,7 +12,6 @@ import torch
 
 import architectures as archs
 from encoding import apply_rx_encoding
-from certainty_factor import certainty_from_samples
 import evaluate as eval_module
 import data_utils
 
@@ -208,7 +207,7 @@ class NoisySimpleQNNModel(torch.nn.Module):
                 else:
                     samples_np = np.asarray(samples, dtype=float).reshape(-1)
 
-                certainty = certainty_from_samples(samples_np)
+                certainty = float(np.clip(np.mean(samples_np), -1.0, 1.0))
                 outputs.append(torch.tensor(certainty, dtype=torch.float32).reshape(()))
 
         return torch.stack(outputs, dim=0)

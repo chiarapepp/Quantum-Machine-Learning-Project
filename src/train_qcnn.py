@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from training_common import (
     predict_dataset,
     to_pm_one_labels,
 )
+from evaluate import evaluate_with_stats
 
 
 def train(
@@ -36,14 +38,19 @@ def train(
     sgd_decay=0.0,
     wandb_project="qml-project",
     wandb_run_name=None,
+    X_test=None,
+    y_test=None,
 ):
     np.random.seed(seed)
 
     y_train = to_pm_one_labels(y_train)
+    y_val_orig = np.asarray(y_val, dtype=int)
     y_val = to_pm_one_labels(y_val)
 
     X_train = np.asarray(X_train, dtype=float)
     X_val = np.asarray(X_val, dtype=float)
+    X_test = None if X_test is None else np.asarray(X_test, dtype=float)
+    y_test = None if y_test is None else np.asarray(y_test, dtype=int)
 
     n_feature_qubits = X_train.shape[1]
     n_train = len(X_train)
@@ -60,7 +67,7 @@ def train(
         interface="autograd",
     )
 
-    default_run_name = f"qcnn_qnn_opt-{optimizer_name}_fq{n_feature_qubits}_lr{lr}"
+    default_run_name = f"qcnn_qnn_opt-{optimizer_name}_lr{lr}"
     if optimizer_name == "sgd":
         default_run_name += f"_mom{sgd_momentum}_decay{sgd_decay}"
 
@@ -110,7 +117,11 @@ def train(
         batch_costs = []
         last_effective_lr = lr
 
-        batch_bar = tqdm(range(0, n_train, batch_size), desc=f"Epoch {epoch + 1}/{epochs}", leave=False)
+        batch_bar = tqdm(
+            range(0, n_train, batch_size),
+            desc=f"Epoch {epoch + 1}/{epochs}",
+            leave=False,
+        )
 
         for start in batch_bar:
             stop = start + batch_size
@@ -139,7 +150,10 @@ def train(
             cost_value = float(cost)
             batch_costs.append(cost_value)
 
-            batch_bar.set_postfix(batch_loss=f"{cost_value:.4f}", lr=f"{effective_lr:.5f}")
+            batch_bar.set_postfix(
+                batch_loss=f"{cost_value:.4f}",
+                lr=f"{effective_lr:.5f}",
+            )
             global_step += 1
 
         train_preds = predict_dataset(weights, X_train, qnode)
@@ -194,12 +208,63 @@ def train(
             step=global_step,
         )
 
+    print("[eval] running final evaluation on best weights...")
+
+    eval_val = evaluate_with_stats(
+        qnode=qnode,
+        X=X_val,
+        y=y_val_orig,
+        params=best_weights,
+    )
+    print(
+        f"[eval] val  | F1={eval_val['f1']:.4f} | "
+        f"acc={eval_val['accuracy']:.4f} | "
+        f"prec={eval_val['precision']:.4f} | "
+        f"recall={eval_val['recall']:.4f} | "
+        f"roc_auc={eval_val['roc_auc']:.4f}"
+    )
+
+    eval_test = None
+    if X_test is not None and y_test is not None:
+        eval_test = evaluate_with_stats(
+            qnode=qnode,
+            X=X_test,
+            y=y_test,
+            params=best_weights,
+        )
+        print(
+            f"[eval] test | F1={eval_test['f1']:.4f} | "
+            f"acc={eval_test['accuracy']:.4f} | "
+            f"prec={eval_test['precision']:.4f} | "
+            f"recall={eval_test['recall']:.4f} | "
+            f"roc_auc={eval_test['roc_auc']:.4f}"
+        )
+
     wandb.summary["best_val_loss"] = best_val_loss
     wandb.summary["best_epoch"] = best_epoch
     wandb.summary["final_train_loss"] = metrics_log["train_loss"][-1]
     wandb.summary["final_train_acc"] = metrics_log["train_acc"][-1]
     wandb.summary["final_val_loss"] = metrics_log["val_loss"][-1]
     wandb.summary["final_val_acc"] = metrics_log["val_acc"][-1]
+
+    eval_keys = (
+        "f1",
+        "accuracy",
+        "precision",
+        "recall",
+        "roc_auc",
+        "cert_mean",
+        "cert_std",
+        "conf_mean",
+        "conf_std",
+    )
+
+    for key in eval_keys:
+        wandb.summary[f"best_val_{key}"] = eval_val[key]
+
+    if eval_test is not None:
+        for key in eval_keys:
+            wandb.summary[f"best_test_{key}"] = eval_test[key]
 
     wandb.finish()
 
@@ -210,6 +275,8 @@ def train(
         "best_epoch": best_epoch,
         "metrics_log": metrics_log,
         "qnode": qnode,
+        "eval_val": eval_val,
+        "eval_test": eval_test,
     }
 
 
@@ -220,7 +287,7 @@ def parse_args():
     parser.add_argument("--raw-csv", type=str, default="data/raw/NF-UNSW-NB15-v2.csv", help="Path to raw CSV used if processed CSV is missing")
     parser.add_argument("--test-size", type=float, default=0.15, help="Test split fraction")
     parser.add_argument("--val-size", type=float, default=0.15, help="Validation split fraction (of train set)")
-    parser.add_argument("--random-state", type=int, default=123, help="Random state for dataset split")
+    parser.add_argument("--random-state", type=int, default=1, help="Random state for dataset split")
     parser.add_argument("--n-bins", type=int, default=100, help="Number of percentile bins for encoding")
 
     parser.add_argument("--lr", type=float, default=0.01, choices=[0.1, 0.05, 0.02, 0.015, 0.01, 0.005, 0.001], help="Learning rate from paper grid")
@@ -262,13 +329,18 @@ if __name__ == "__main__":
         n_bins=args.n_bins,
     )
 
-    print(f"[train] encoded data loaded | train={pack['X_train'].shape}, val={pack['X_val'].shape}, test={pack['X_test'].shape}")
+    print(
+        f"[train] encoded data loaded | "
+        f"train={pack['X_train'].shape}, val={pack['X_val'].shape}, test={pack['X_test'].shape}"
+    )
 
     result = train(
         X_train=pack["X_train"],
         y_train=pack["y_train"],
         X_val=pack["X_val"],
         y_val=pack["y_val"],
+        X_test=pack["X_test"],
+        y_test=pack["y_test"],
         lr=args.lr,
         batch_size=args.batch_size,
         epochs=args.epochs,
@@ -300,3 +372,23 @@ if __name__ == "__main__":
         effective_lr=np.asarray(result["metrics_log"]["effective_lr"], dtype=float),
     )
     print(f"[train] saved metrics log to {metrics_path}")
+
+    eval_keys = (
+        "f1",
+        "accuracy",
+        "precision",
+        "recall",
+        "roc_auc",
+        "cert_mean",
+        "cert_std",
+        "conf_mean",
+        "conf_std",
+    )
+    eval_summary = {"val": {k: result["eval_val"][k] for k in eval_keys}}
+    if result["eval_test"] is not None:
+        eval_summary["test"] = {k: result["eval_test"][k] for k in eval_keys}
+
+    eval_path = save_dir / "eval_summary.json"
+    with open(eval_path, "w", encoding="utf-8") as f:
+        json.dump(eval_summary, f, indent=2)
+    print(f"[train] saved eval summary to {eval_path}")

@@ -55,7 +55,7 @@ def train(
     dev = qml.device("lightning.qubit", wires=n_feature_qubits)
     qnode = build_ttn_qnn(n_qubits=n_feature_qubits, dev=dev)
 
-    default_run_name = f"ttn_qnn_opt-{optimizer_name}_fq{n_feature_qubits}_lr{lr}"
+    default_run_name = f"ttn_qnn_opt-{optimizer_name}_lr{lr}"
     if optimizer_name == "sgd":
         default_run_name += f"_mom{sgd_momentum}_decay{sgd_decay}"
 
@@ -215,7 +215,7 @@ def parse_args():
     parser.add_argument("--raw-csv", type=str, default="data/raw/NF-UNSW-NB15-v2.csv", help="Path to raw CSV used if processed CSV is missing")
     parser.add_argument("--test-size", type=float, default=0.15, help="Test split fraction")
     parser.add_argument("--val-size", type=float, default=0.15, help="Validation split fraction (of train set)")
-    parser.add_argument("--random-state", type=int, default=123, help="Random state for dataset split")
+    parser.add_argument("--random-state", type=int, default=1, help="Random state for dataset split")
     parser.add_argument("--n-bins", type=int, default=100, help="Number of percentile bins for encoding")
 
     parser.add_argument("--lr", type=float, default=0.01, choices=[0.1, 0.05, 0.02, 0.015, 0.01, 0.005, 0.001], help="Learning rate from paper grid")
