@@ -21,4 +21,4 @@ tmp/
 *.dll
 
 data/
-wandb/
+wandb/data/raw/NF-UNSW-NB15-v2.csv
