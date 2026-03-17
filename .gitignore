@@ -22,3 +22,6 @@ tmp/
 
 data/
 wandb/data/raw/NF-UNSW-NB15-v2.csv
+wandb/
+outputs/
+results/

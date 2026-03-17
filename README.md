@@ -25,27 +25,35 @@ The experiments are performed using PennyLane, enabling simulation of quantum ci
 
 ### Project Structure
 ```
-Quantum_Anomaly_Detection/
+Quantum-Machine-Learning-Project/
 │
 ├── src/
 │   ├── architectures.py        # QNN architectures (Simple, TTN, MERA, QCNN)
-│   ├── encoding.py             # Feature encoding into quantum states
-│   ├── model.py                # QNN model wrapper and circuit construction
+│   ├── data_utils.py           # Data utilities and helpers
 │   ├── dataset.py              # Dataset loading and preprocessing
-│   ├── train.py                # Training loop
+│   ├── draw_circuits.py        # Circuit diagram generation
+│   ├── encoding.py             # Feature encoding into quantum states
 │   ├── evaluate.py             # Evaluation metrics and testing
-│   └── certainty_factor.py     # Prediction confidence computation
+│   ├── noise_eval.py           # Noise model evaluation
+│   ├── train_mera.py           # MERA training pipeline
+│   ├── train_qcnn.py           # QCNN training pipeline
+│   ├── train_simple.py         # Simple circuit training pipeline
+│   ├── train_ttn.py            # TTN training pipeline
+│   └── training_common.py      # Shared training logic
 │
-├── draw_circuits.py            # Utility to visualize quantum circuits
-├── main.py                     # Main script for training experiments
+├── data/
+│   ├── processed/
+│   │   └── nf_unsw_balanced.csv
+│   └── raw/
+│       └── NF-UNSW-NB15-v2.csv
 │
-├── data/                       # Processed network traffic dataset
-├── images/                     # Circuit visualizations and plots
-│
-└── README.md                   # Project documentation
+├── figures/
+│   └── circuits/               # Saved circuit diagrams
+├── requirements.txt
+└── README.md
 ```
 
-### Requiriments 
+### Requirements 
 
 1. Clone the repository:
    ```bash
@@ -65,7 +73,11 @@ Place the raw dataset in `data/raw/`:
 ```
 data/raw/NF-UNSW-NB15-v2.csv
 ```
-A balanced preprocessed version is already provided at `data/processed/nf_unsw_balanced.csv`.
+To generate the processed dataset, run:
+```bash
+python src/dataset.py
+```
+The balanced CSV will be saved to `data/processed/nf_unsw_balanced.csv`. If the processed CSV is missing, the training scripts will create it automatically.
 
 ## Usage
 
@@ -78,39 +90,67 @@ python src/train_mera.py
 python src/train_qcnn.py
 ```
 
+All training scripts share a common set of arguments. Example with custom options:
+
+```bash
+python src/train_simple.py --epochs 20 --lr 0.005 --batch-size 32 --optimizer adam --save-best-weights
+```
+
+### Fixed Parameters (Data, Split, Reproducibility, Outputs)
+
+These are the arguments you typically keep fixed across runs:
+
+- `--processed-csv` (default: `data/processed/nf_unsw_balanced.csv`) -> processed dataset path
+- `--raw-csv` (default: `data/raw/NF-UNSW-NB15-v2.csv`) -> raw dataset path used if processed CSV is missing
+- `--test-size` (default: `0.15`) -> test split fraction
+- `--val-size` (default: `0.15`) -> validation split fraction (of the training split)
+- `--n-bins` (default: `100`) -> number of percentile bins for quantum encoding
+- `--random-state` (default: `1`) -> split reproducibility
+- `--seed` (default: `123`) -> initialization reproducibility
+- `--save-dir` (default: `outputs/<arch>`) -> output directory for metrics and weights
+
+### Weights & Biases (Optional)
+
+You can customize logging with:
+
+- `--wandb-project` to choose the project name
+- `--wandb-run-name` to set a custom run name
+
+If not provided, run naming is handled automatically.
+
+### Training Configuration
+
+| Argument | Default | Description |
+|---|---|---|
+| `--epochs` | `10` | Number of training epochs. Increase for longer training, reduce for quick tests. |
+| `--lr` | `0.01` | Learning rate. |
+| `--batch-size` | `16` | Mini-batch size. |
+| `--optimizer` | `adam` | Optimizer type: `adam` or `sgd`. |
+| `--sgd-momentum` | `0.0` | SGD momentum (used only when `--optimizer sgd`; allowed: `0.0`, `0.2`, `0.3`). |
+| `--sgd-decay` | `0.0` | SGD decay rate (used only when `--optimizer sgd`. |
+| `--save-best-weights` | `False` | If enabled, saves the best validation weights to disk. |
+| `--n-layers` | `2` | Number of variational layers; available only in `train_simple.py`. |
+| `--layer-type` | `XXYY` | Entangling layer type for `train_simple.py`: `XXYY`, `ZZXX`, `ZZYY`, or `ZZXXYY`. |
+
+### Visualization
 To visualize the quantum circuits:
 ```bash
 python src/draw_circuits.py
 ```
+| Simple circuit | QCNN circuit  |
+|---------------|----------------|
+| ![s](figures/circuits/simple_8fq_2layers_xxyy.png) | ![q](figures/circuits/qcnn_8q.png) |
 
+| TTN circuit | MERA circuit  |
+|---------------|----------------|
+| ![t](figures/circuits/ttn_8q.png) | ![m](figures/circuits/mera_8q_3scales.png) |
+
+### Noise Evaluation
 To evaluate a checkpoint under depolarizing noise:
 ```bash
 python src/noise_eval.py
 ```
 
-## Project Layout
-
-- `src/architectures.py` — quantum circuit builders for all four architectures
-- `src/encoding.py` — quantized-angle encoding (`QuantumEncoder`)
-- `src/dataset.py` — dataset loading and class-balanced splitting
-- `src/certainty_factor.py` — certainty and confidence utilities
-- `src/train_simple.py`, `train_ttn.py`, `train_mera.py`, `train_qcnn.py` — training pipelines
-- `src/evaluate.py` — evaluation metrics (accuracy, F1, AUC, certainty stats)
-- `src/noise_eval.py` — depolarizing noise model and noisy evaluation
-- `src/draw_circuits.py` — circuit diagram generation
-- `data/` — raw and processed datasets
-- `results/` — training checkpoints and grid-search summaries
-- `figures/circuits/` — saved circuit diagrams
-- `configs/` — example run configurations
-
-## Model Parameters (8 qubits)
-
-| Architecture | Number of Parameters |
-|--------------|----------------------|
-| Simple (L=2) | 64                   |
-| TTN          | 42                   |
-| MERA         | 66                   |
-| QCNN         | 30                   |
 
 ## Results (NF-UNSW-NB15-v2, best validation F1)
 
