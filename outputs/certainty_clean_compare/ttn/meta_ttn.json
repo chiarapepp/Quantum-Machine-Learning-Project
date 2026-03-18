@@ -1,0 +1,16 @@
+{
+  "job_name": "qml_certainty_clean",
+  "slurm_job_id": "12325049",
+  "slurm_array_job_id": "12325046",
+  "slurm_array_task_id": "1",
+  "arch": "ttn",
+  "weights_path": "/tudelft.net/staff-umbrella/StudentsCVlab/chiarapeppicel/projects/qml/outputs/arch_compare/ttn/best_weights.npy",
+  "data_csv": "/tudelft.net/staff-umbrella/StudentsCVlab/chiarapeppicel/projects/qml/src/data/processed/nf_unsw_balanced.csv",
+  "split": "test",
+  "label": "clean",
+  "encoder_fit_scope": "all",
+  "started_at": "2026-03-18T12:04:02+0100",
+  "ended_at": "2026-03-18T12:06:32+0100",
+  "duration_seconds": 150,
+  "save_dir": "/tudelft.net/staff-umbrella/StudentsCVlab/chiarapeppicel/projects/qml/outputs/certainty_clean_compare/ttn"
+}

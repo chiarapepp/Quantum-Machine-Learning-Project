@@ -1,0 +1,41 @@
+{
+  "arch": "ttn",
+  "split": "test",
+  "label": "clean",
+  "weights_path": "/tudelft.net/staff-umbrella/StudentsCVlab/chiarapeppicel/projects/qml/outputs/arch_compare/ttn/best_weights.npy",
+  "threshold": 0.0,
+  "processed_csv": "/tudelft.net/staff-umbrella/StudentsCVlab/chiarapeppicel/projects/qml/src/data/processed/nf_unsw_balanced.csv",
+  "test_size": 0.15,
+  "val_size": 0.15,
+  "random_state": 1,
+  "n_bins": 100,
+  "encoder_fit_scope": "all",
+  "metrics": {
+    "f1": 0.15770470664087685,
+    "accuracy": 0.5418712301865619,
+    "precision": 0.9768370607028753,
+    "recall": 0.08577640622808248,
+    "roc_auc": 0.3651414312569865,
+    "cf_mean": -0.0025449097861951157,
+    "cf_std": 0.24469558969321226,
+    "conf_mean": 0.19593208555596586,
+    "conf_std": 0.14660500001984386
+  },
+  "certainty_stats": {
+    "all_mean": -0.0025449097861951157,
+    "all_std": 0.24469558969321226,
+    "all_conf_mean": 0.19593208555596586,
+    "all_conf_std": 0.14660500001984386,
+    "correct_mean": 0.1784438488302738,
+    "correct_std": 0.15532669957705209,
+    "incorrect_mean": -0.21661703916017538,
+    "incorrect_std": 0.13262239637941772,
+    "correct_conf_mean": 0.1784438488302738,
+    "incorrect_conf_mean": 0.21661703916017538,
+    "frac_above_zero": 0.5418712301865619,
+    "frac_below_zero": 0.4581287698134381,
+    "frac_abs_lt_0.1": 0.34748912891008554,
+    "frac_abs_lt_0.2": 0.6929443119652126,
+    "frac_abs_lt_0.5": 0.9815191471454622
+  }
+}
