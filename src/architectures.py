@@ -118,12 +118,11 @@ def build_simple_qnn(
     """
     Build the paper's Simple architecture.
 
-    - wires 0..n-1 hold the encoded features
-    - wire n is the dedicated result qubit
-    - the result qubit is initialized to |-> = X|0> then H|0>
-    - each layer applies the chosen Pauli interaction between the
-      result qubit and every feature qubit
-    - measurement is <X> on the result qubit
+    - input encoding: RX on each feature qubit
+    - an additional result qubit is prepared in the |-> state (X followed by H)
+    - each layer applies the selected Pauli-interaction block between
+    the result qubit and every feature qubit
+    - final readout: <X> on the result qubit
     """
     result_wire = n_feature_qubits
     terms = _parse_layer_type(layer_type)
@@ -194,6 +193,7 @@ def build_ttn_qnn(
 
     return qnode
 
+
 def build_mera_qnn(
     n_qubits: int,
     dev,
@@ -237,6 +237,7 @@ def build_mera_qnn(
 
     return qnode
 
+
 def build_qcnn_qnn(
     n_qubits: int,
     dev,
@@ -266,6 +267,7 @@ def build_qcnn_qnn(
         active = list(range(n_qubits))
 
         while len(active) > 2:
+            # shared convolution parameters
             conv_params = params[idx: idx + 6]
             idx += 6
 
@@ -275,6 +277,7 @@ def build_qcnn_qnn(
             for i in range(1, len(active) - 1, 2):
                 _rot_rot_cnot(conv_params, [active[i], active[i + 1]])
 
+            # shared pooling parameters
             pool_params = params[idx: idx + 6]
             idx += 6
 

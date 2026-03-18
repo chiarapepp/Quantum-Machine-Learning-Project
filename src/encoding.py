@@ -1,4 +1,3 @@
-from typing import Optional
 import numpy as np
 import pandas as pd
 import pennylane as qml
@@ -34,6 +33,17 @@ N_QUBITS = len(FEATURE_COLUMNS)  # one qubit per feature → 8 qubits
 
 
 class QuantumEncoder:
+    """
+    Encode the 8 selected NF-UNSW features into RX rotation angles.
+
+    Encoding rule:
+    - features with few unique values are mapped categorically to [0, pi]
+    - features with many unique values are mapped by percentile binning
+    - all resulting angles are quantized to 0.25-degree steps
+
+    The output is an array of shape (n_samples, 8), with one angle per feature
+    and therefore one qubit per feature.
+    """
     def __init__(self, n_bins: int = 100):
         self.n_bins = n_bins
         self.cat_maps: dict = {}          # col → {value: bin_index}
@@ -58,6 +68,7 @@ class QuantumEncoder:
         df = df[FEATURE_COLUMNS].copy()
         n = len(df)
 
+        # Initialize angles matrix (n_samples, n_features)
         angles = np.zeros((n, N_QUBITS), dtype=float)
 
         for j, col in enumerate(FEATURE_COLUMNS):
@@ -85,7 +96,7 @@ class QuantumEncoder:
             # Quantize to nearest 0.25° step
             theta_arr = np.round(theta_arr / ANGLE_QUANTUM) * ANGLE_QUANTUM
 
-            # Clamp to [0, π]
+            # clipping to [0, π] (to handle any potential numerical issues)
             angles[:, j] = np.clip(theta_arr, 0.0, np.pi)
 
         return angles
@@ -94,5 +105,7 @@ class QuantumEncoder:
         return self.fit(df).transform(df)
 
 
+# x is an array of shape (n_features,) containing the angles for each feature/qubit 
+# and is the output of the QuantumEncoder.transform() method
 def apply_rx_encoding(x: np.ndarray) -> None:
     qml.AngleEmbedding(x, wires=range(N_QUBITS), rotation="X")

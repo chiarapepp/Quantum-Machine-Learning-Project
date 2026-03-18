@@ -1,107 +1,30 @@
+"""
+Run post-training certainty-factor evaluation for trained QNN weight files.
+
+This script rebuilds encoded data splits, loads architecture-specific QNodes,
+computes prediction and certainty metrics on a selected split, and saves per-sample
+outputs, summary JSON metrics, and diagnostic plots.
+"""
+
 import argparse
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List
-
+from typing import Any, Dict
 import matplotlib.pyplot as plt
 import pandas as pd
 import pennylane as qml
 from pennylane import numpy as np
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_auc_score
-from sklearn.model_selection import train_test_split
 
+import data_utils
 import dataset as ds_module
-import encoding as enc_module
 from architectures import (
     build_mera_qnn,
     build_qcnn_qnn,
     build_simple_qnn,
     build_ttn_qnn,
 )
-
-
-LABEL_COLUMN = "Label"
-FEATURE_COLUMNS = list(enc_module.FEATURE_COLUMNS)
-
-
-def load_encoded_splits_custom(
-    processed_csv: str,
-    test_size: float = 0.15,
-    val_size: float = 0.15,
-    random_state: int = 1,
-    n_bins: int = 100,
-    encoder_fit_scope: str = "all",
-) -> Dict[str, Any]:
-    """
-    Rebuild the exact train/val/test split and encode it.
-
-    encoder_fit_scope:
-      - "all": reproduces the current training scripts/data_utils.py behavior
-               (train+val+test used to fit the encoder).
-      - "train": stricter version with encoder fitted only on train.
-    """
-    if not os.path.exists(processed_csv):
-        raise FileNotFoundError(f"Processed CSV not found: {processed_csv}")
-
-    df = pd.read_csv(processed_csv)
-    X_all = df[FEATURE_COLUMNS].copy()
-    y_all = df[LABEL_COLUMN].to_numpy(dtype=int)
-
-    X_trainval_df, X_test_df, y_trainval, y_test = train_test_split(
-        X_all,
-        y_all,
-        test_size=test_size,
-        random_state=random_state,
-        shuffle=True,
-        stratify=y_all,
-    )
-
-    X_train_df, X_val_df, y_train, y_val = train_test_split(
-        X_trainval_df,
-        y_trainval,
-        test_size=val_size,
-        random_state=random_state,
-        shuffle=True,
-        stratify=y_trainval,
-    )
-
-    X_train_df = X_train_df.reset_index(drop=True)
-    X_val_df = X_val_df.reset_index(drop=True)
-    X_test_df = X_test_df.reset_index(drop=True)
-    y_train = np.asarray(y_train, dtype=int)
-    y_val = np.asarray(y_val, dtype=int)
-    y_test = np.asarray(y_test, dtype=int)
-
-    encoder = enc_module.QuantumEncoder(n_bins=n_bins)
-    if encoder_fit_scope == "train":
-        encoder.fit(X_train_df)
-    elif encoder_fit_scope == "all":
-        encoder.fit(pd.concat([X_train_df, X_val_df, X_test_df], axis=0).reset_index(drop=True))
-    else:
-        raise ValueError("encoder_fit_scope must be either 'train' or 'all'.")
-
-    X_train = encoder.transform(X_train_df)
-    X_val = encoder.transform(X_val_df)
-    X_test = encoder.transform(X_test_df)
-
-    print(
-        f"[certainty] Encoded splits -> train: {X_train.shape}, val: {X_val.shape}, test: {X_test.shape}"
-    )
-    print(
-        f"[certainty] Label balance -> train: {np.bincount(y_train)}, val: {np.bincount(y_val)}, test: {np.bincount(y_test)}"
-    )
-    print(f"[certainty] Encoder fit scope: {encoder_fit_scope}")
-
-    return {
-        "X_train": X_train,
-        "y_train": y_train,
-        "X_val": X_val,
-        "y_val": y_val,
-        "X_test": X_test,
-        "y_test": y_test,
-        "encoder": encoder,
-    }
 
 
 def build_qnode_from_args(args, n_feature_qubits: int):
@@ -160,7 +83,7 @@ def predict_labels(raw_outputs: np.ndarray, threshold: float = 0.0) -> np.ndarra
 
 def certainty_factor_from_output(raw_outputs: np.ndarray, y_true: np.ndarray) -> np.ndarray:
     """
-    Paper-aligned signed certainty for binary labels.
+    Signed certainty for binary labels.
 
     raw_output is expected in [-1, 1] where:
       raw_output >= 0 -> malicious (1)
@@ -174,6 +97,7 @@ def certainty_factor_from_output(raw_outputs: np.ndarray, y_true: np.ndarray) ->
     raw_outputs = np.clip(np.asarray(raw_outputs, dtype=float), -1.0, 1.0)
     y_true = np.asarray(y_true, dtype=int)
     y_pm = 2 * y_true - 1
+    # definition of certainty factor: signed distance from the decision boundary, coherent with training and prediction
     return y_pm * raw_outputs
 
 
@@ -203,6 +127,7 @@ def certainty_stats(certainty_factor: np.ndarray, y_true: np.ndarray, y_pred: np
         "incorrect_conf_mean": float(np.mean(conf[incorrect])) if np.any(incorrect) else float("nan"),
         "frac_above_zero": float(np.mean(certainty_factor > 0.0)),
         "frac_below_zero": float(np.mean(certainty_factor < 0.0)),
+        # measure how many predictions are close to the decision boundary (i.e. low confidence) highly uncertain 
         "frac_abs_lt_0.1": float(np.mean(conf < 0.1)),
         "frac_abs_lt_0.2": float(np.mean(conf < 0.2)),
         "frac_abs_lt_0.5": float(np.mean(conf < 0.5)),
@@ -343,7 +268,6 @@ def save_summary_json(result: Dict[str, Any], args, save_path: Path):
         "val_size": args.val_size,
         "random_state": args.random_state,
         "n_bins": args.n_bins,
-        "encoder_fit_scope": args.encoder_fit_scope,
         "metrics": {
             "f1": result["f1"],
             "accuracy": result["accuracy"],
@@ -374,13 +298,6 @@ def parse_args():
     parser.add_argument("--val-size", type=float, default=0.15)
     parser.add_argument("--random-state", type=int, default=1)
     parser.add_argument("--n-bins", type=int, default=100)
-    parser.add_argument(
-        "--encoder-fit-scope",
-        type=str,
-        default="all",
-        choices=["all", "train"],
-        help="Use 'all' to reproduce your existing runs; use 'train' for leakage-free encoding.",
-    )
 
     parser.add_argument("--split", type=str, default="test", choices=["train", "val", "test"])
     parser.add_argument("--threshold", type=float, default=0.0)
@@ -416,13 +333,12 @@ def main():
     save_dir = Path(args.save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    pack = load_encoded_splits_custom(
+    pack = data_utils.load_encoded_splits(
         processed_csv=processed_csv,
         test_size=args.test_size,
         val_size=args.val_size,
         random_state=args.random_state,
         n_bins=args.n_bins,
-        encoder_fit_scope=args.encoder_fit_scope,
     )
 
     split_key_x = f"X_{args.split}"

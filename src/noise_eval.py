@@ -1,5 +1,9 @@
-from __future__ import annotations
+"""
+Evaluate trained simple QNN checkpoints or raw weights under configurable depolarizing noise.
 
+This module builds noisy inference models, runs noise-level sweeps on encoded test data,
+and optionally saves aggregate evaluation metrics to JSON.
+"""
 import argparse
 import json
 import os
@@ -57,6 +61,7 @@ def make_depolarizing_noise_model(
     single_qubit_cond = _single_qubit_condition()
     two_qubit_cond = _two_qubit_condition()
 
+    # depolarizing noise for single qubits with probability p_single
     def single_qubit_noise(op, **kwargs):
         return qml.DepolarizingChannel(p_single, wires=op.wires[0])
 
@@ -73,7 +78,7 @@ def make_depolarizing_noise_model(
         }
     )
 
-
+# simple qnn that do sampling instead of expval, to test noise impact on certainties
 def build_simple_qnn_samples(
     n_feature_qubits: int,
     n_layers: int,

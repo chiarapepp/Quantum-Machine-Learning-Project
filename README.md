@@ -29,12 +29,14 @@ Quantum-Machine-Learning-Project/
 │
 ├── src/
 │   ├── architectures.py        # QNN architectures (Simple, TTN, MERA, QCNN)
-│   ├── data_utils.py           # Data utilities and helpers
+│   ├── data_utils.py           # Data loading & splits (centralized encoder initialization)
 │   ├── dataset.py              # Dataset loading and preprocessing
 │   ├── draw_circuits.py        # Circuit diagram generation
 │   ├── encoding.py             # Feature encoding into quantum states
 │   ├── evaluate.py             # Evaluation metrics and testing
-│   ├── noise_eval.py           # Noise model evaluation
+│   ├── certainty_eval.py       # Post-training certainty-factor evaluation
+│   ├── certainty_noise_eval.py # Certainty evaluation under depolarizing noise
+│   ├── noise_eval.py           # Noise robustness evaluation
 │   ├── train_mera.py           # MERA training pipeline
 │   ├── train_qcnn.py           # QCNN training pipeline
 │   ├── train_simple.py         # Simple circuit training pipeline
@@ -42,13 +44,25 @@ Quantum-Machine-Learning-Project/
 │   └── training_common.py      # Shared training logic
 │
 ├── data/
-│   ├── processed/
+│   ├── processed/              # Processed and balanced datasets
 │   │   └── nf_unsw_balanced.csv
-│   └── raw/
+│   └── raw/                    # Raw datasets
 │       └── NF-UNSW-NB15-v2.csv
 │
+├── outputs/                    # Training outputs (weights, metrics, checkpoints)
+│   ├── simple/, ttn/, mera/, qcnn/   # Per-architecture training artifacts
+│   ├── certainty/              # Certainty factor evaluation outputs
+│   └── certainty_noise/        # Noisy certainty evaluation outputs
+│
+├── results/                    # Analysis results and evaluations
+│   ├── noise/                  # Noise robustness evaluation results
+│   └── [analysis outputs]
+│
+├── docs/                       # Project documentation and reports
+│
 ├── figures/
-│   └── circuits/               # Saved circuit diagrams
+│   └── circuits/               # Saved quantum circuit diagrams
+│
 ├── requirements.txt
 └── README.md
 ```
@@ -100,14 +114,16 @@ python src/train_simple.py --epochs 20 --lr 0.005 --batch-size 32 --optimizer ad
 
 These are the arguments you typically keep fixed across runs:
 
-- `--processed-csv` (default: `data/processed/nf_unsw_balanced.csv`) -> processed dataset path
-- `--raw-csv` (default: `data/raw/NF-UNSW-NB15-v2.csv`) -> raw dataset path used if processed CSV is missing
-- `--test-size` (default: `0.15`) -> test split fraction
-- `--val-size` (default: `0.15`) -> validation split fraction (of the training split)
-- `--n-bins` (default: `100`) -> number of percentile bins for quantum encoding
-- `--random-state` (default: `1`) -> split reproducibility
-- `--seed` (default: `123`) -> initialization reproducibility
-- `--save-dir` (default: `outputs/<arch>`) -> output directory for metrics and weights
+- `--processed-csv` (default: `data/processed/nf_unsw_balanced.csv`) → processed dataset path
+- `--raw-csv` (default: `data/raw/NF-UNSW-NB15-v2.csv`) → raw dataset path used if processed CSV is missing
+- `--test-size` (default: `0.15`) → test split fraction
+- `--val-size` (default: `0.15`) → validation split fraction (of the training split)
+- `--n-bins` (default: `100`) → number of percentile bins for quantum encoding
+- `--random-state` (default: `1`) → split reproducibility
+- `--seed` (default: `123`) → initialization reproducibility
+- `--save-dir` (default: `outputs/<arch>`) → output directory for metrics and weights
+
+**Note:** All data loading and encoding is centralized in `data_utils.py`, ensuring consistent train/val/test splits and encoder fitting across training and evaluation scripts.
 
 ### Weights & Biases (Optional)
 
@@ -145,19 +161,93 @@ python src/draw_circuits.py
 |---------------|----------------|
 | ![t](figures/circuits/ttn_8q.png) | ![m](figures/circuits/mera_8q_3scales.png) |
 
-### Noise Evaluation
-To evaluate a checkpoint under depolarizing noise:
+## Post-Training Evaluation & Analysis
+
+After training, use the following scripts to evaluate model robustness, certainty metrics, and performance under noise.
+
+### Noise Robustness Evaluation
+Evaluate a trained checkpoint under configurable depolarizing noise conditions:
 ```bash
-python src/noise_eval.py
+python src/noise_eval.py \
+  --ckpt outputs/simple/best_model.pt \
+  --data_csv data/processed/nf_unsw_balanced.csv \
+  --shots 200 \
+  --batch_size 32 \
+  --mode shots
 ```
 
+Key arguments:
+- `--ckpt`: Path to PyTorch checkpoint (`.pt` file with config and model state)
+- `--weights`: Alternative to `--ckpt` for raw `.npy` weight files
+- `--levels`: Noise levels to evaluate (default: all predefined levels)
+- `--mode`: Inference mode (`expval` or `shots`)
+- `--shots`: Number of measurement shots (for `--mode shots`)
+- `--two_qubit_scale`: Scale two-qubit noise relative to single-qubit noise
+- `--output`: Path to save results JSON
 
-## Results (NF-UNSW-NB15-v2, best validation F1)
+Output: Aggregated metrics (F1, accuracy, AUC) across noise levels saved to JSON.
 
-| Architecture | Best Val F1 |
-|--------------|-------------|
-| TTN (L=2)    | 0.748       |
+### Certainty Factor Evaluation (Clean Environment)
+Analyze prediction certainty and confidence on trained weight files:
+```bash
+python src/certainty_eval.py \
+  --arch simple \
+  --weights-path outputs/simple/final_weights.npy \
+  --split test \
+  --n-layers 2 \
+  --layer-type XXYY \
+  --save-dir outputs/certainty
+```
 
+Key arguments:
+- `--arch`: Architecture type (`simple`, `ttn`, `mera`, `qcnn`)
+- `--weights-path`: Path to trained `.npy` weights file
+- `--split`: Data split to evaluate (`train`, `val`, `test`)
+- `--threshold`: Decision threshold for binary classification (default: `0.0`)
+- `--n-bins`: Number of encoding bins (default: `100`, must match training)
+- `--save-dir`: Output directory for results
+- `--save-prefix`: Custom prefix for output files
+
+Outputs:
+- `{prefix}_samples.csv`: Per-sample predictions and certainty factors
+- `{prefix}_summary.json`: Aggregate metrics and certainty statistics
+- `{prefix}_violin.png`: Distribution of certainty factors across predictions
+- `{prefix}_hist.png`: Histogram of certainty for correct vs. incorrect predictions
+
+### Certainty Factor Evaluation Under Noise
+Evaluate prediction certainty under synthetic depolarizing noise:
+```bash
+python src/certainty_noise_eval.py \
+  --weights-path outputs/simple/final_weights.npy \
+  --n-layers 2 \
+  --layer-type XXYY \
+  --split test \
+  --noise-level medium \
+  --mode shots \
+  --shots 200 \
+  --save-dir outputs/certainty_noise
+```
+
+Key arguments:
+- `--weights-path`: Path to trained `.npy` weights file (required)
+- `--n-layers`: Number of variational layers (required)
+- `--layer-type`: Entangling layer type (`XXYY`, `ZZXX`, `ZZYY`, `ZZXXYY`)
+- `--noise-level`: Noise severity (`clean`, `very_low`, `low`, `medium`, `high`, `very_high`)
+- `--mode`: Inference mode (`expval` for expectation values, `shots` for measurement averaging)
+- `--shots`: Number of measurement shots per inference (used when `--mode shots`)
+- `--two-qubit-scale`: Scale factor for two-qubit gate noise (default: `1.0`)
+- `--batch_size`: Batch size for evaluation (default: `32`)
+- `--save-dir`: Output directory for results
+
+Outputs: Same structure as **Certainty Factor Evaluation**, with noise level metadata in files and JSON summary.
+
+## Documentation & Analysis
+
+For comprehensive analysis, visualizations, and detailed results, please refer to the project report in the `docs/` folder. The report includes:
+- Detailed performance comparison across architectures;
+- Noise robustness analysis;
+- Certainty factor distributions and statistical summaries;
+- Quantum circuit efficiency metrics.
 
 ## References
 

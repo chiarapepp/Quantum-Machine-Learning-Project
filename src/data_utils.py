@@ -3,17 +3,14 @@ Data loading and quantum encoding utilities.
 
 - load the balanced processed CSV
 - perform the stratified 85/15 split
-- fit the QuantumEncoder on the training split only
-- transform train and test splits into angle-encoded arrays
+- fit the QuantumEncoder and transform train and test splits into angle-encoded arrays
 """
 
-from json import encoder
 from typing import Any, Dict
 import os
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
-
 import encoding as enc_module
 
 
@@ -69,7 +66,7 @@ def load_encoded_splits(
 ) -> Dict[str, Any]:
     """
     Load the balanced processed CSV, split into train/val/test, fit the
-    QuantumEncoder on train only, and return encoded arrays.
+    QuantumEncoder and return encoded arrays.
 
     Split procedure:
     1. Stratified train/test split (test_size fraction of full dataset).

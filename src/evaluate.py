@@ -7,19 +7,23 @@ from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_sc
 
 
 def predict_outputs(qnode: Callable, X: np.ndarray, params: np.ndarray) -> np.ndarray:
+    """Run a QNode on each sample and return raw outputs as a 1-D array."""
     X = np.asarray(X, dtype=float)
     return np.asarray([qnode(x, params) for x in X], dtype=float).reshape(-1)
 
 
 def certainty_from_output(output: np.ndarray) -> np.ndarray:
+    """Clip model outputs to the certainty range [-1, 1]."""
     return np.clip(np.asarray(output, dtype=float), -1.0, 1.0)
 
 
 def confidence_from_certainty(certainty: np.ndarray) -> np.ndarray:
+    """Convert signed certainty values to absolute confidence values."""
     return np.abs(np.asarray(certainty, dtype=float))
 
 
 def predict_labels(raw_outputs: np.ndarray, threshold: float = 0.0) -> np.ndarray:
+    """Map raw outputs to binary labels using a decision threshold."""
     # coherent with training:
     # output >= 0 -> +1 -> malicious -> 1
     # output <  0 -> -1 -> benign    -> 0
@@ -34,6 +38,7 @@ def evaluate_qnode(
     params: np.ndarray,
     threshold: float = 0.0,
 ) -> Dict[str, Any]:
+    """Evaluate a QNode on a dataset and return classification metrics and outputs."""
     X = np.asarray(X, dtype=float)
     y = np.asarray(y, dtype=int)
 
@@ -78,6 +83,7 @@ def evaluate_qnode(
 
 
 def certainty_stats(certainties: np.ndarray, y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, Any]:
+    """Compute aggregate certainty and confidence statistics for predictions."""
     certainties = np.asarray(certainties, dtype=float)
     y_true = np.asarray(y_true, dtype=int)
     y_pred = np.asarray(y_pred, dtype=int)
@@ -110,6 +116,7 @@ def evaluate_with_stats(
     params: np.ndarray,
     threshold: float = 0.0,
 ) -> Dict[str, Any]:
+    """Evaluate a QNode and attach certainty summary statistics to the output."""
     out = evaluate_qnode(qnode=qnode, X=X, y=y, params=params, threshold=threshold)
     out["certainty_stats"] = certainty_stats(out["certainties"], out["y_true"], out["preds"])
     return out
@@ -124,12 +131,7 @@ def evaluate_model(
     desc: str = "",
     threshold: float = 0.0,
 ) -> Dict[str, Any]:
-    """
-    Evaluate a PyTorch model (e.g. NoisySimpleQNNModel) on a dataset.
-
-    The model's forward() must accept a float32 tensor of shape (batch, features)
-    and return a 1-D tensor of certainty-like scalars in [-1, 1].
-    """
+    """Evaluate a PyTorch model on a dataset and return metrics and certainty values."""
     import torch
 
     X = np.asarray(X, dtype=float)
