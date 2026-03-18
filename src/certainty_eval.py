@@ -8,7 +8,6 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import pennylane as qml
 from pennylane import numpy as np
-import seaborn as sns
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_auc_score
 from sklearn.model_selection import train_test_split
 
@@ -289,14 +288,21 @@ def make_samples_dataframe(result: Dict[str, Any], label: str, arch: str, split:
 
 
 def save_violin_plot(df: pd.DataFrame, save_path: Path, title: str):
+    labels = list(df["label"].dropna().unique())
+    data = [
+        df.loc[df["label"] == lbl, "certainty_factor"].to_numpy(dtype=float)
+        for lbl in labels
+    ]
+
     plt.figure(figsize=(8, 6))
-    sns.violinplot(
-        data=df,
-        x="label",
-        y="certainty_factor",
-        inner="quartile",
-        cut=0,
+    plt.violinplot(
+        data,
+        positions=range(1, len(labels) + 1),
+        showmeans=False,
+        showmedians=True,
+        showextrema=True,
     )
+    plt.xticks(range(1, len(labels) + 1), labels)
     plt.axhline(0.0, linestyle="--", linewidth=1.2)
     plt.ylim(-1.05, 1.05)
     plt.xlabel("")
@@ -308,21 +314,18 @@ def save_violin_plot(df: pd.DataFrame, save_path: Path, title: str):
 
 
 def save_histogram_plot(df: pd.DataFrame, save_path: Path, title: str):
+    correct = df.loc[df["correct"] == 1, "certainty_factor"].to_numpy(dtype=float)
+    wrong = df.loc[df["correct"] == 0, "certainty_factor"].to_numpy(dtype=float)
+
     plt.figure(figsize=(8, 6))
-    sns.histplot(
-        data=df,
-        x="certainty_factor",
-        hue="correct",
-        bins=30,
-        stat="count",
-        element="bars",
-        common_norm=False,
-    )
+    plt.hist(correct, bins=30, alpha=0.7, label="correct")
+    plt.hist(wrong, bins=30, alpha=0.7, label="wrong")
     plt.axvline(0.0, linestyle="--", linewidth=1.2)
     plt.xlim(-1.05, 1.05)
     plt.xlabel("Certainty factor")
     plt.ylabel("Count")
     plt.title(title)
+    plt.legend()
     plt.tight_layout()
     plt.savefig(save_path, dpi=200, bbox_inches="tight")
     plt.close()
