@@ -17,12 +17,6 @@ All architectures share the same **input encoding scheme** and produce a **singl
 
 The experiments are performed using PennyLane, enabling simulation of quantum circuits and experimentation with noisy quantum devices.
 
-### Main Objective
-- Reproduce the architectures proposed in the paper.
-- Study how different quantum circuit topologies affect classification performance.
-- Investigate the trade-off between expressibility and hardware feasibility on NISQ devices.
-- Analyze the impact of noise models on QNN performance.
-
 ### Project Structure
 ```
 Quantum-Machine-Learning-Project/
@@ -56,7 +50,6 @@ Quantum-Machine-Learning-Project/
 │
 ├── results/                    # Analysis results and evaluations
 │   ├── noise/                  # Noise robustness evaluation results
-│   └── [analysis outputs]
 │
 ├── docs/                       # Project documentation and reports
 │
@@ -123,8 +116,6 @@ These are the arguments you typically keep fixed across runs:
 - `--seed` (default: `123`) → initialization reproducibility
 - `--save-dir` (default: `outputs/<arch>`) → output directory for metrics and weights
 
-**Note:** All data loading and encoding is centralized in `data_utils.py`, ensuring consistent train/val/test splits and encoder fitting across training and evaluation scripts.
-
 ### Weights & Biases (Optional)
 
 You can customize logging with:
@@ -163,7 +154,7 @@ python src/draw_circuits.py
 
 ## Post-Training Evaluation & Analysis
 
-After training, use the following scripts to evaluate model robustness, certainty metrics, and performance under noise.
+After training it's possible to evaluate model robustness, certainty metrics, and performance under noise.
 
 ### Noise Robustness Evaluation
 Evaluate a trained checkpoint under configurable depolarizing noise conditions:
@@ -187,7 +178,7 @@ Key arguments:
 
 Output: Aggregated metrics (F1, accuracy, AUC) across noise levels saved to JSON.
 
-### Certainty Factor Evaluation (Clean Environment)
+### Certainty Factor Evaluation (Noiseless Environment)
 Analyze prediction certainty and confidence on trained weight files:
 ```bash
 python src/certainty_eval.py \
@@ -246,8 +237,7 @@ Outputs: Same structure as **Certainty Factor Evaluation**, with noise level met
 For comprehensive analysis, visualizations, and detailed results, please refer to the project report in the `docs/` folder. The report includes:
 - Detailed performance comparison across architectures;
 - Noise robustness analysis;
-- Certainty factor distributions and statistical summaries;
-- Quantum circuit efficiency metrics.
+- Certainty factor distributions and statistical summaries.
 
 ## References
 

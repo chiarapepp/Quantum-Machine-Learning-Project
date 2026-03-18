@@ -1,0 +1,40 @@
+{
+  "arch": "simple",
+  "split": "test",
+  "label": null,
+  "weights_path": "outputs/simple_missing_lr_batch_opt/l6_xxyy_lr_0.05_opt_adam_bs_32/best_weights.npy",
+  "threshold": 0.0,
+  "processed_csv": "data/processed/nf_unsw_balanced.csv",
+  "test_size": 0.15,
+  "val_size": 0.15,
+  "random_state": 1,
+  "n_bins": 100,
+  "metrics": {
+    "f1": 0.7971606378840917,
+    "accuracy": 0.7805442558563613,
+    "precision": 0.7410509822827528,
+    "recall": 0.8624631785664189,
+    "roc_auc": 0.8056566240821683,
+    "cf_mean": 0.36981526911566404,
+    "cf_std": 0.5935458971081734,
+    "conf_mean": 0.6466497245538997,
+    "conf_std": 0.2662784237962268
+  },
+  "certainty_stats": {
+    "all_mean": 0.36981526911566404,
+    "all_std": 0.5935458971081734,
+    "all_conf_mean": 0.6466497245538997,
+    "all_conf_std": 0.2662784237962268,
+    "correct_mean": 0.6511257920631073,
+    "correct_std": 0.2643819375548517,
+    "incorrect_mean": -0.6307295726491474,
+    "incorrect_std": 0.2723213968984494,
+    "correct_conf_mean": 0.6511257920631073,
+    "incorrect_conf_mean": 0.6307295726491474,
+    "frac_above_zero": 0.7805442558563613,
+    "frac_below_zero": 0.21945574414363866,
+    "frac_abs_lt_0.1": 0.05677514377893113,
+    "frac_abs_lt_0.2": 0.10099593210829008,
+    "frac_abs_lt_0.5": 0.24452938701080096
+  }
+}
