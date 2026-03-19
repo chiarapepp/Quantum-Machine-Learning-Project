@@ -45,7 +45,7 @@ Quantum-Machine-Learning-Project/
 │
 ├── outputs/                    # Training outputs (weights, metrics, checkpoints)
 │   ├── simple/, ttn/, mera/, qcnn/   # Per-architecture training artifacts
-│   ├── certainty/              # Certainty factor evaluation outputs
+│   ├── certainty_noiseless/           # Certainty factor evaluation outputs
 │   └── certainty_noise/        # Noisy certainty evaluation outputs
 │
 ├── results/                    # Analysis results and evaluations
