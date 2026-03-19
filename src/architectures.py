@@ -1,3 +1,11 @@
+"""
+Quantum model architecture definitions used across the project.
+
+This module provides circuit builders and parameter-count helpers for the
+Simple, TTN, MERA, and QCNN quantum neural network variants used in training
+and evaluation scripts.
+"""
+
 from typing import Callable, List
 import pennylane as qml
 from pennylane import numpy as np

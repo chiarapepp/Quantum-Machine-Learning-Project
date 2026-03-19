@@ -1,3 +1,11 @@
+"""
+Certainty-factor evaluation under synthetic depolarizing noise.
+
+This script loads encoded splits, rebuilds a noisy Simple QNN from saved
+weights, computes classification and certainty metrics on a selected split, and
+saves per-sample outputs, summary JSON, and diagnostic plots.
+"""
+
 import argparse
 import json
 import os

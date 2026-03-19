@@ -1,3 +1,11 @@
+"""
+Feature preprocessing and angle encoding for quantum inputs.
+
+This module defines the paper-aligned feature set, computes percentile-based
+binning thresholds from training data, maps classical features to rotation
+angles, and applies RX encoding on quantum wires.
+"""
+
 import numpy as np
 import pandas as pd
 import pennylane as qml

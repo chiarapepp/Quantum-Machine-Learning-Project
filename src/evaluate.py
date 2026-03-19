@@ -1,3 +1,10 @@
+"""
+Model evaluation helpers for QNN outputs and certainty-style metrics.
+
+This module provides utility functions to run batched model inference and to
+compute classification metrics and confidence-related summary statistics.
+"""
+
 from __future__ import annotations
 
 from typing import Any, Callable, Dict

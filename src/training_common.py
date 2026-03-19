@@ -1,3 +1,9 @@
+"""
+Shared training utilities.
+This module includes common loss and metric helpers reused by architecture-
+specific training pipelines.
+"""
+
 import pennylane as qml
 from pennylane import numpy as np
 

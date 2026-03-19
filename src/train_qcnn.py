@@ -1,3 +1,10 @@
+"""
+Training entry point for the QCNN quantum neural network architecture.
+
+This script executes the QCNN training workflow from data preparation to model
+optimization, metric reporting, and checkpoint/weight export.
+"""
+
 import argparse
 import json
 import os

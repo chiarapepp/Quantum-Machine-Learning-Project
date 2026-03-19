@@ -1,3 +1,10 @@
+"""
+Training entry point for the MERA quantum neural network architecture.
+
+This script runs end-to-end MERA training, including data loading, model
+optimization, metric tracking, and output artifact saving.
+"""
+
 import argparse
 import json
 import os

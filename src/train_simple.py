@@ -1,3 +1,10 @@
+"""
+Training entry point for the Simple variational QNN architecture.
+
+This script prepares data, builds the Simple model, runs optimization, tracks
+metrics, and saves checkpoints, weights, and training summaries.
+"""
+
 import argparse
 import json
 import os

@@ -2,7 +2,7 @@
 Data loading and quantum encoding utilities.
 
 - load the balanced processed CSV
-- perform the stratified 85/15 split
+- perform the train/val/test split
 - fit the QuantumEncoder and transform train and test splits into angle-encoded arrays
 """
 

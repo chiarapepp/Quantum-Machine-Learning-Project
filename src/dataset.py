@@ -1,3 +1,14 @@
+"""
+Dataset preprocessing utilities for NF-UNSW-NB15.
+
+This module builds a balanced processed dataset used by the training and
+evaluation pipelines. It loads the raw CSV, keeps the eight paper features plus
+the binary label, drops invalid or non-numeric rows, enforces numeric dtypes,
+checks label integrity, and down-samples the benign class to match malicious
+samples. The resulting DataFrame can be returned in memory and optionally saved
+to disk as a processed CSV.
+"""
+
 from typing import Optional
 import os
 import warnings

@@ -1,3 +1,10 @@
+"""
+Circuit visualization utilities for project QNN architectures.
+
+This module instantiates reference circuits for Simple, TTN, MERA, and QCNN
+models and exports rendered diagrams to the figures directory.
+"""
+
 import os
 import matplotlib.pyplot as plt
 import pennylane as qml

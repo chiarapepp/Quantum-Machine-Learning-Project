@@ -1,3 +1,10 @@
+"""
+Training entry point for the TTN quantum neural network architecture.
+
+This script handles dataset preparation, TTN model construction, optimization,
+logging, and artifact persistence for reproducible experiments.
+"""
+
 import argparse
 import json
 import os
