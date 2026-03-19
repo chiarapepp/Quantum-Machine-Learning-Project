@@ -157,10 +157,12 @@ python src/draw_circuits.py
 After training it's possible to evaluate model robustness, certainty metrics, and performance under noise.
 
 ### Noise Robustness Evaluation
-Evaluate a trained checkpoint under configurable depolarizing noise conditions:
+Evaluate trained raw weights under configurable depolarizing noise conditions:
 ```bash
 python src/noise_eval.py \
-  --ckpt outputs/simple/best_model.pt \
+  --weights outputs/simple/best_weights.npy \
+  --n-layers 2 \
+  --layer-type XXYY \
   --data_csv data/processed/nf_unsw_balanced.csv \
   --shots 200 \
   --batch_size 32 \
@@ -168,13 +170,16 @@ python src/noise_eval.py \
 ```
 
 Key arguments:
-- `--ckpt`: Path to PyTorch checkpoint (`.pt` file with config and model state)
-- `--weights`: Alternative to `--ckpt` for raw `.npy` weight files
+- `--weights`: Path to raw `.npy` weight file
+- `--n-layers`: Number of variational layers (required when using `--weights`)
+- `--layer-type`: Entangling layer type (`XXYY`, `ZZXX`, `ZZYY`, `ZZXXYY`)
 - `--levels`: Noise levels to evaluate (default: all predefined levels)
 - `--mode`: Inference mode (`expval` or `shots`)
 - `--shots`: Number of measurement shots (for `--mode shots`)
 - `--two_qubit_scale`: Scale two-qubit noise relative to single-qubit noise
 - `--output`: Path to save results JSON
+
+Note: this script currently supports only the `simple` architecture.
 
 Output: Aggregated metrics (F1, accuracy, AUC) across noise levels saved to JSON.
 
@@ -239,10 +244,12 @@ For comprehensive analysis, visualizations, and detailed results, please refer t
 - Noise robustness analysis;
 - Certainty factor distributions and statistical summaries.
 
+For additional experiment tracking logs, a [Weights & Biases workspace](https://wandb.ai/chiara-peppicelli-university-of-florence/qml-project?nw=nwuserchiarapeppicelli) is also available.
+
 ## References
 
 - [Dataset: NF-UNSW-NB15-v2 (NetFlow-based network intrusion detection) ](hhttps://espace.library.uq.edu.au/view/UQ:ffbb0c1) *, The University of Queensland.* 
-- [Network Anomaly Detection Using Quantum Neural Networks on Noisy Quantum Computers](https://ieeexplore.ieee.org/document/10415536)*, Kukliansky et al., EEE Transactions on Quantum
+- [Network Anomaly Detection Using Quantum Neural Networks on Noisy Quantum Computers](https://ieeexplore.ieee.org/document/10415536)*, Kukliansky et al., IEEE Transactions on Quantum
 Engineering, 5:1–11, 2024.*
 
 

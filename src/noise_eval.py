@@ -1,8 +1,8 @@
 """
-Evaluate trained simple QNN checkpoints or raw weights under configurable depolarizing noise.
+Evaluate trained simple QNN raw weights under configurable depolarizing noise.
 
-This module builds noisy inference models, runs noise-level sweeps on encoded test data,
-and optionally saves aggregate evaluation metrics to JSON.
+This module builds noisy inference models, runs noise-level sweeps on encoded
+test data, and optionally saves aggregate evaluation metrics to JSON.
 """
 import argparse
 import json
@@ -235,54 +235,6 @@ def _attach_eval_metadata(
     return stats
 
 
-def evaluate_checkpoint_under_noise(
-    ckpt_path: str,
-    X_test: np.ndarray,
-    y_test: np.ndarray,
-    noise_level: str = "medium",
-    shots: int = 200,
-    batch_size: int = 32,
-    two_qubit_scale: float = 1.0,
-    inference_mode: str = "shots",
-) -> Dict[str, Any]:
-    _validate_noise_inputs(noise_level=noise_level, two_qubit_scale=two_qubit_scale)
-
-    ckpt = torch.load(ckpt_path, map_location="cpu")
-    cfg = ckpt["config"]
-    state = ckpt["model_state"]
-
-    arch = str(cfg["arch"]).strip().lower()
-    if arch != "simple":
-        raise NotImplementedError(
-            "This noise_eval.py currently supports only the 'simple' architecture."
-        )
-
-    p_single = PAPER_NOISE_LEVELS[noise_level]
-    p_two = min(1.0, p_single * float(two_qubit_scale))
-
-    noisy_model = NoisySimpleQNNModel(
-        n_feature_qubits=int(cfg["n_feature_qubits"]),
-        n_layers=int(cfg["n_layers"]),
-        layer_type=str(cfg.get("layer_type", "XXYY")),
-        noise_prob_single=p_single,
-        noise_prob_two=p_two,
-        shots=int(shots),
-        inference_mode=inference_mode,
-    )
-    noisy_model.load_state_dict(state, strict=True)
-    noisy_model.eval()
-
-    stats = eval_module.evaluate_model(
-        noisy_model,
-        X_test,
-        y_test,
-        batch_size=batch_size,
-        device="cpu",
-        desc=f"noise={noise_level}|mode={inference_mode}",
-    )
-    return _attach_eval_metadata(stats, p_single, p_two, shots, inference_mode)
-
-
 def evaluate_weights_under_noise(
     weights_path: str,
     X_test: np.ndarray,
@@ -339,10 +291,9 @@ def evaluate_weights_under_noise(
 def run_noise_sweep(
     X_test: np.ndarray,
     y_test: np.ndarray,
-    ckpt_path: str | None = None,
-    weights_path: str | None = None,
+    weights_path: str,
     arch: str = "simple",
-    n_layers: int | None = None,
+    n_layers: int = 2,
     layer_type: str = "XXYY",
     noise_levels: List[str] | None = None,
     shots: int = 200,
@@ -354,12 +305,17 @@ def run_noise_sweep(
     if noise_levels is None:
         noise_levels = list(PAPER_NOISE_LEVELS.keys())
 
-    if ckpt_path is None and weights_path is None:
-        raise ValueError("You must provide either ckpt_path or weights_path.")
-    if ckpt_path is not None and weights_path is not None:
-        raise ValueError("Provide only one of ckpt_path or weights_path.")
+    if not weights_path:
+        raise ValueError("weights_path must be provided.")
 
     results: Dict[str, Dict[str, float]] = {}
+
+    if arch != "simple":
+        raise NotImplementedError(
+            "Raw-weights mode currently supports only the 'simple' architecture."
+        )
+    if n_layers is None:
+        raise ValueError("--n-layers is required when using --weights.")
 
     for lvl in noise_levels:
         print(
@@ -369,38 +325,19 @@ def run_noise_sweep(
             f"mode={inference_mode})"
         )
 
-        if ckpt_path is not None:
-            stats = evaluate_checkpoint_under_noise(
-                ckpt_path=ckpt_path,
-                X_test=X_test,
-                y_test=y_test,
-                noise_level=lvl,
-                shots=shots,
-                batch_size=batch_size,
-                two_qubit_scale=two_qubit_scale,
-                inference_mode=inference_mode,
-            )
-        else:
-            if arch != "simple":
-                raise NotImplementedError(
-                    "Raw-weights mode currently supports only the 'simple' architecture."
-                )
-            if n_layers is None:
-                raise ValueError("--n-layers is required when using --weights.")
-
-            stats = evaluate_weights_under_noise(
-                weights_path=str(weights_path),
-                X_test=X_test,
-                y_test=y_test,
-                n_feature_qubits=X_test.shape[1],
-                n_layers=n_layers,
-                layer_type=layer_type,
-                noise_level=lvl,
-                shots=shots,
-                batch_size=batch_size,
-                two_qubit_scale=two_qubit_scale,
-                inference_mode=inference_mode,
-            )
+        stats = evaluate_weights_under_noise(
+            weights_path=str(weights_path),
+            X_test=X_test,
+            y_test=y_test,
+            n_feature_qubits=X_test.shape[1],
+            n_layers=n_layers,
+            layer_type=layer_type,
+            noise_level=lvl,
+            shots=shots,
+            batch_size=batch_size,
+            two_qubit_scale=two_qubit_scale,
+            inference_mode=inference_mode,
+        )
 
         summary = {
             "f1": float(stats["f1"]),
@@ -437,15 +374,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
-        "--ckpt",
-        type=str,
-        default=None,
-        help="Optional PyTorch checkpoint with config + model_state.",
-    )
-    parser.add_argument(
         "--weights",
         type=str,
-        default=None,
+        required=True,
         help="Path to .npy weights file, e.g. best_weights.npy.",
     )
     parser.add_argument(
@@ -484,11 +415,6 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    if args.ckpt is None and args.weights is None:
-        raise ValueError("Provide either --ckpt or --weights.")
-    if args.ckpt is not None and args.weights is not None:
-        raise ValueError("Provide only one of --ckpt or --weights.")
-
     pack = data_utils.load_encoded_splits(args.data_csv)
     X_test = pack["X_test"]
     y_test = pack["y_test"]
@@ -496,7 +422,6 @@ if __name__ == "__main__":
     run_noise_sweep(
         X_test=X_test,
         y_test=y_test,
-        ckpt_path=args.ckpt,
         weights_path=args.weights,
         arch=args.arch,
         n_layers=args.n_layers,
