@@ -1,0 +1,18 @@
+{
+  "job_name": "qml_noise_simple",
+  "slurm_job_id": "12293575",
+  "slurm_array_job_id": "12293575",
+  "slurm_array_task_id": "5",
+  "level": "very_high",
+  "weights_path": "/tudelft.net/staff-umbrella/StudentsCVlab/chiarapeppicel/projects/qml/outputs/simple/final_weights.npy",
+  "data_csv": "/tudelft.net/staff-umbrella/StudentsCVlab/chiarapeppicel/projects/qml/src/data/processed/nf_unsw_balanced.csv",
+  "mode": "shots",
+  "shots": 200,
+  "batch_size": 32,
+  "n_layers": 2,
+  "layer_type": "XXYY",
+  "started_at": "2026-03-14T18:46:04+0100",
+  "ended_at": "2026-03-15T07:44:54+0100",
+  "duration_seconds": 46730,
+  "result_json": "/tudelft.net/staff-umbrella/StudentsCVlab/chiarapeppicel/projects/qml/results/noise/simple_default/noise_very_high.json"
+}
