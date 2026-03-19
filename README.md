@@ -13,7 +13,7 @@ The project implements and compares four quantum models proposed in the paper:
 - Multi-scale Entanglement Renormalization Ansatz (MERA)
 - Quantum Convolutional Neural Network (QCNN)
 
-All architectures share the same **input encoding scheme** and produce a **single-qubit measurement** used for binary classification (for more details on the architecture reference the report in the folder)
+All architectures share the same **input encoding scheme** and produce a **single-qubit measurement** used for binary classification (for more details on the architecture reference the report in the folder).
 
 The experiments are performed using PennyLane, enabling simulation of quantum circuits and experimentation with noisy quantum devices.
 
@@ -43,7 +43,7 @@ Quantum-Machine-Learning-Project/
 │   └── raw/                    # Raw datasets
 │       └── NF-UNSW-NB15-v2.csv
 │
-├── outputs/                    # Training outputs (weights, metrics, checkpoints)
+├── outputs/                    # Training outputs 
 │   ├── simple/, ttn/, mera/, qcnn/   # Per-architecture training artifacts
 │   ├── certainty_noiseless/           # Certainty factor evaluation outputs
 │   └── certainty_noise/        # Noisy certainty evaluation outputs
